@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "replicas"
+version = "0.1.0"
+description = "Bootstrap confidence intervals for classifier metrics on Spark."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Hamed Seyed-Allaei" },
+]
+requires-python = ">=3.9"
+keywords = [
+    "bootstrap",
+    "confidence-intervals",
+    "classifier-metrics",
+    "precision-recall",
+    "pyspark",
+    "machine-learning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "pyspark>=3.3",
+    "pandas>=1.3",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+plot = [
+    "matplotlib>=3.5",
+    "seaborn>=0.12",
+]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+    "ruff",
+    "matplotlib>=3.5",
+    "seaborn>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/allaei/replicas"
+Issues = "https://github.com/allaei/replicas/issues"
+
+[tool.setuptools.packages.find]
+include = ["replicas*"]
+exclude = ["tests*", "examples*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # line length handled by formatter
