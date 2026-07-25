@@ -22,7 +22,7 @@ applies.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
@@ -80,22 +80,24 @@ def confusion_table(df: DataFrame, group_by: Sequence[str] | None = None) -> Dat
     else:
         joined = df_by_score.crossJoin(totals)
 
-    return (
-        joined
-        .withColumns(
-            {
-                "TP": F.sum("dTP").over(window),
-                "FP": F.sum("dFP").over(window),
-                "UP": F.sum("dUP").over(window),
-            }
-        )
-        .select(
-            *group_by,
-            F.col("prediction").alias("threshold"),
-            "TP", "FP", "UP",
-            "dTP", "dFP", "dUP",
-            "positives", "negatives", "unlabeled",
-        )
+    return joined.withColumns(
+        {
+            "TP": F.sum("dTP").over(window),
+            "FP": F.sum("dFP").over(window),
+            "UP": F.sum("dUP").over(window),
+        }
+    ).select(
+        *group_by,
+        F.col("prediction").alias("threshold"),
+        "TP",
+        "FP",
+        "UP",
+        "dTP",
+        "dFP",
+        "dUP",
+        "positives",
+        "negatives",
+        "unlabeled",
     )
 
 
@@ -164,9 +166,7 @@ def at(df: DataFrame, group_by: Sequence[str] | None = None, **kwargs) -> DataFr
         threshold you would deploy.
     """
     if len(kwargs) != 1:
-        raise ValueError(
-            f"at() requires exactly one metric=value condition, got {len(kwargs)}"
-        )
+        raise ValueError(f"at() requires exactly one metric=value condition, got {len(kwargs)}")
 
     group_by = list(group_by or [])
     metric, value = next(iter(kwargs.items()))

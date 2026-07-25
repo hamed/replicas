@@ -12,7 +12,7 @@ plot of operating-point metrics, and a PR curve with a confidence band.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 try:
     import matplotlib.pyplot as plt
@@ -114,17 +114,9 @@ def plot_pr(
     if recall_round is not None:
         df = df.withColumn("recall", F.round("recall", recall_round))
 
-    df = (
-        df.groupBy(*group_by, "replica")
-        .agg(F.max("precision").alias("precision"))
-    )
+    df = df.groupBy(*group_by, "replica").agg(F.max("precision").alias("precision"))
 
-    original = (
-        df.filter(F.col("replica") == -1)
-        .toPandas()
-        .set_index(group_by)
-        .sort_index()
-    )
+    original = df.filter(F.col("replica") == -1).toPandas().set_index(group_by).sort_index()
 
     bts = (
         df.filter(F.col("replica") >= 0)

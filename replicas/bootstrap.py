@@ -6,7 +6,7 @@ The whole library is built on two functions in this module. Everything in
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
