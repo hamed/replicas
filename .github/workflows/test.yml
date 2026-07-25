@@ -11,6 +11,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Pinned so a new ruff release cannot turn this job red on its own. Keep
+      # in step with the ruff pin in the dev extra.
+      - name: Lint
+        run: uvx ruff@0.16.0 check .
+
+      - name: Check formatting
+        run: uvx ruff@0.16.0 format --check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
