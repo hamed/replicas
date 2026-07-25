@@ -33,6 +33,8 @@ dependencies = [
     "pyspark>=3.3",
     "pandas>=1.3",
     "numpy>=1.21",
+    # bootstrap.sample() uses applyInPandas, which requires Arrow serialization.
+    "pyarrow>=4",
 ]
 
 [project.optional-dependencies]
