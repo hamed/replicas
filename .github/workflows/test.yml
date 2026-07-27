@@ -1,0 +1,65 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Pinned so a new ruff release cannot turn this job red on its own. Keep
+      # in step with the ruff pin in the dev extra.
+      - name: Lint
+        run: uvx ruff@0.16.0 check .
+
+      - name: Check formatting
+        run: uvx ruff@0.16.0 format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject declares requires-python >=3.9. Older interpreters resolve
+        # to pyspark 4.0.x, newer ones to 4.2.x; test both ends so a resolver
+        # change does not silently break one of them.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install from a clean environment
+        run: |
+          uv venv --python ${{ matrix.python-version }}
+          uv pip install -e '.[dev,plot]'
+
+      # Installing from the declared dependencies alone, with nothing
+      # preinstalled, is the point: an undeclared runtime dependency shows up
+      # here as a failure rather than in a user's first bootstrap() call.
+      - name: Run tests
+        run: uv run --no-project pytest -q

@@ -13,37 +13,24 @@ passes is the whole reason the library exists.
 from __future__ import annotations
 
 import pytest
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 from replicas import bootstrap, calculate_pr, confusion_table
 
 
-@pytest.fixture(scope="session")
-def spark():
-    """Single SparkSession reused across tests."""
-    s = (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("replicas-tests")
-        .config("spark.sql.shuffle.partitions", "2")
-        .getOrCreate()
-    )
-    yield s
-    s.stop()
-
-
 @pytest.fixture
 def toy_predictions(spark):
     """A small predictions DataFrame with positives, negatives, unlabeled."""
-    schema = T.StructType([
-        T.StructField("prediction", T.DoubleType(),  True),
-        T.StructField("positive",   T.IntegerType(), True),
-        T.StructField("negative",   T.IntegerType(), True),
-        T.StructField("unlabeled",  T.IntegerType(), True),
-        T.StructField("name",       T.StringType(),  True),
-    ])
+    schema = T.StructType(
+        [
+            T.StructField("prediction", T.DoubleType(), True),
+            T.StructField("positive", T.IntegerType(), True),
+            T.StructField("negative", T.IntegerType(), True),
+            T.StructField("unlabeled", T.IntegerType(), True),
+            T.StructField("name", T.StringType(), True),
+        ]
+    )
     rows = [
         (0.95, 1, 0, 0, "m"),
         (0.90, 1, 0, 0, "m"),
@@ -113,8 +100,7 @@ def test_recall_never_exceeds_one(toy_predictions):
     ct = confusion_table(bts, group_by=["name", "replica"])
     kpi = calculate_pr(ct, group_by=["name", "replica"])
 
-    rows = kpi.select(F.max("recall").alias("max_r"),
-                      F.min("recall").alias("min_r")).collect()[0]
+    rows = kpi.select(F.max("recall").alias("max_r"), F.min("recall").alias("min_r")).collect()[0]
     assert rows["max_r"] <= 1.0 + 1e-9
     assert rows["min_r"] >= 0.0 - 1e-9
 

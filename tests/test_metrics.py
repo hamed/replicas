@@ -3,35 +3,23 @@
 from __future__ import annotations
 
 import pytest
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 from replicas import at, calculate_pr, confusion_table
 
 
-@pytest.fixture(scope="session")
-def spark():
-    s = (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("replicas-metrics-tests")
-        .config("spark.sql.shuffle.partitions", "2")
-        .getOrCreate()
-    )
-    yield s
-    s.stop()
-
-
 @pytest.fixture
 def perfect_classifier(spark):
     """Predictions where score perfectly separates positives from negatives."""
-    schema = T.StructType([
-        T.StructField("prediction", T.DoubleType(),  True),
-        T.StructField("positive",   T.IntegerType(), True),
-        T.StructField("negative",   T.IntegerType(), True),
-        T.StructField("unlabeled",  T.IntegerType(), True),
-    ])
+    schema = T.StructType(
+        [
+            T.StructField("prediction", T.DoubleType(), True),
+            T.StructField("positive", T.IntegerType(), True),
+            T.StructField("negative", T.IntegerType(), True),
+            T.StructField("unlabeled", T.IntegerType(), True),
+        ]
+    )
     rows = [
         (0.9, 1, 0, 0),
         (0.8, 1, 0, 0),
@@ -72,12 +60,14 @@ def test_perfect_classifier_has_perfect_pr(perfect_classifier):
 
 def test_unlabeled_counted_as_up_not_fp(spark):
     """Unlabeled rows should contribute to UP, never to FP."""
-    schema = T.StructType([
-        T.StructField("prediction", T.DoubleType(),  True),
-        T.StructField("positive",   T.IntegerType(), True),
-        T.StructField("negative",   T.IntegerType(), True),
-        T.StructField("unlabeled",  T.IntegerType(), True),
-    ])
+    schema = T.StructType(
+        [
+            T.StructField("prediction", T.DoubleType(), True),
+            T.StructField("positive", T.IntegerType(), True),
+            T.StructField("negative", T.IntegerType(), True),
+            T.StructField("unlabeled", T.IntegerType(), True),
+        ]
+    )
     rows = [
         (0.9, 0, 0, 1),  # unlabeled at top
         (0.8, 1, 0, 0),
