@@ -75,9 +75,18 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
-# Notebooks introduce imports next to the cell that first needs them, which is
-# the point of a narrative example.
-"examples/*.ipynb" = ["E402"]
+# The notebook is the reference design, kept as it was executed. Ruff lints it
+# as one module, which misreads three properties of a narrative notebook:
+#
+# E402  imports are introduced next to the cell that first needs them.
+# I001  cell-local import order is authored, not sorted; sorting it produces a
+#       diff on a file whose committed outputs would no longer match.
+# F811  the setup cell re-imports `np` and `plt` on purpose. The cell above it
+#       is marked "skip this cell, only for demonstration", so setup has to
+#       stand on its own — `plot_pr` calls `plt.fill_between`. Ruff sees a
+#       redefinition; a reader who skips as instructed sees a NameError once
+#       the "redundant" import is removed.
+"examples/*.ipynb" = ["E402", "I001", "F811"]
 
 [tool.ruff.format]
 # Prose, not source. The formatter rewrites Python inside README code blocks
