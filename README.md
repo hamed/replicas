@@ -112,6 +112,16 @@ recall > 1. The test suite has a regression test for exactly this
 (`test_recall_never_exceeds_one`). If you ever feel tempted to remove the
 checkpoint to save the I/O, run that test.
 
+## Reference design
+
+`examples/precision_recall.ipynb` is the notebook this library was ported from,
+committed as it was executed — the prose, the figures, and a worked
+credit-card-fraud comparison of two models. It is the specification, not a
+demo of the package: it defines every function inline so it runs in Colab with
+nothing installed. `docs/reference-design.md` records where the library
+intentionally differs from it, and which of its odd-looking details are
+load-bearing.
+
 ## Status
 
 Early days — version 0.1. API may change. Feedback welcome.
