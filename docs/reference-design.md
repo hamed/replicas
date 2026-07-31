@@ -108,15 +108,28 @@ The library also takes the `SparkSession` from
 
 - **`plot_steps` / `plot_ci`** (cell 2) — the two figures that explain what
   bootstrap is before any Spark appears. No equivalent in `replicas.plotting`.
-- **Per-replica AUC** (cell 46) — present as a `toPandas()` loop, and cell 47
-  states the intended replacement: "swap the Python loop above for a fully
-  Spark-native AUC computation grouped by replica — `BinaryClassificationEvaluator`
-  does not natively group, but it is easy enough to write the trapezoidal AUC
-  over the confusion table directly." Note that cell 46 has no committed output;
-  it was never executed, so the reference does not verify it either.
 - **Two-model comparison** faceted by `hue='name'` (cells 42-43) — the payoff of
   the whole notebook, and untested in the library, whose fixtures use a single
   model.
+
+## Deliberately out of scope
+
+**The AUC section (cells 45-47) is not a missing feature.** It exists to show
+that the bootstrap output is generic — that any metric you can express as
+`groupBy('replica').agg(...)` becomes a distribution, using whatever tool you
+like, with no support from this library. That is the notebook's thesis, and the
+demonstration only works if the AUC is computed with something outside the
+package. Shipping `replicas.auc()` would argue the opposite: that metrics need
+to be blessed by the library first.
+
+The `toPandas()` loop in cell 46 is therefore illustrative, not a placeholder.
+Cell 47's aside about a Spark-native trapezoidal AUC over the confusion table is
+advice to the reader with large data, not a TODO for this package. Cell 46 has
+no committed output; it was never executed.
+
+The same reasoning applies to any future "add metric X" proposal. The library's
+job is `bootstrap`; PR curves ship with it because they are the worked example
+and their Spark implementation is subtle, not because metrics belong here.
 
 ## Rules for changing the notebook
 
@@ -138,10 +151,7 @@ Read off the notebook, in the order worth doing:
    (threshold `0.88` for `precision=0.81`) are published numbers the library
    should be pinned to. Current fixtures in `tests/` use all-distinct scores and
    one model, so tie collapsing and multi-model grouping have no coverage.
-2. **Spark-native `auc()` over the confusion table**, per cell 47. Delivers the
-   notebook's own stated TODO and gives the library a second metric, which is
-   what backs the claim that PR curves are the demo and not the point.
-3. **Single-pass `bootstrap`.** The notebook's loop over `union` is 101 scans of
+2. **Single-pass `bootstrap`.** The notebook's loop over `union` is 101 scans of
    the input and 100 shuffles at `n_replicas=100`. A `crossJoin` against replica
    ids followed by one `applyInPandas` has constant plan depth. The output
    contract — `replica` ids `-1..n-1`, per-stratum size preserved, checkpointed —
