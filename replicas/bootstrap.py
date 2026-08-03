@@ -1,106 +1,113 @@
-"""The bootstrap primitive: resample a Spark DataFrame, materialize once.
-
-The whole library is built on two functions in this module. Everything in
-`replicas.metrics` is just `groupBy('replica').agg(...)` on their output.
-"""
+"""Backend-neutral exact bootstrap sampling."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from importlib import import_module
+from typing import Any, Optional, Union
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from replicas._sampling import (
+    normalize_columns,
+    run_seed,
+    validate_columns,
+    validate_fraction,
+    validate_n_replicas,
+)
+
+# This alias is evaluated at import time on Python 3.9, unlike postponed
+# function annotations, so it must use typing's pre-PEP 604 spelling.
+ColumnArgument = Optional[Union[str, list[str], tuple[str, ...]]]  # noqa: UP007, UP045
 
 
-def sample(df: DataFrame, by: Sequence[str], fraction: float = 1.0) -> DataFrame:
-    """Sample with replacement within each group of a DataFrame.
+def _backend_name(df: Any) -> str:
+    roots = {cls.__module__.partition(".")[0] for cls in type(df).__mro__}
+    for root, backend in (("pandas", "pandas"), ("polars", "polars"), ("pyspark", "spark")):
+        if root in roots:
+            return backend
+    raise TypeError(
+        "unsupported dataframe type "
+        f"{type(df).__module__}.{type(df).__qualname__}; expected pandas, Polars, or Spark"
+    )
 
-    Parameters
-    ----------
-    df : DataFrame
-        The input Spark DataFrame.
-    by : sequence of str
-        Column names to stratify the sampling over. Pass an empty list for
-        unstratified sampling. Under class imbalance, stratifying on the label
-        column prevents replicas with zero positives (which would make many
-        metrics undefined).
-    fraction : float, optional
-        Fraction of rows to sample within each group. Defaults to 1.0,
-        meaning each replica is the same size as the original.
 
-    Returns
-    -------
-    DataFrame
-        A new Spark DataFrame with the same schema, containing the resampled
-        rows.
+def _backend(df: Any) -> tuple[str, Any]:
+    name = _backend_name(df)
+    return name, import_module(f"replicas._backends.{name}")
 
-    Notes
-    -----
-    No random seed is set inside this function — deliberately. The function is
-    called inside a loop by `bootstrap`, once per replica. If the seed were
-    fixed, every iteration would produce the *same* "random" sample and all
-    your replicas would collapse to one. The lack of a per-call seed is what
-    makes the replicas actually different. For run-level reproducibility, seed
-    at the SparkContext level instead.
+
+def sample(
+    df: Any,
+    by: ColumnArgument = None,
+    fraction: float = 1.0,
+    *,
+    seed: int | None = None,
+    order_by: ColumnArgument = None,
+) -> Any:
+    """Sample with replacement, exactly and independently within each stratum.
+
+    The input may be a pandas, Polars, or Spark DataFrame; the return value has
+    the same dataframe type. A supplied seed pins the PCG64 draws. For Spark,
+    seeded calls require ``order_by`` to define stable positions within every
+    stratum; those columns must uniquely order each stratum.
     """
-    return df.groupBy(list(by)).applyInPandas(
-        lambda pdf: pdf.sample(frac=fraction, replace=True),  # No seed — see docstring.
-        schema=df.schema,
+    by_columns = normalize_columns(by, name="by")
+    order_columns = normalize_columns(order_by, name="order_by")
+    fraction = validate_fraction(fraction)
+    seed_value, seeded = run_seed(seed)
+    backend_name, backend = _backend(df)
+    validate_columns(
+        df.columns,
+        by=by_columns,
+        order_by=order_columns,
+        reject_replica=True,
+    )
+    if backend_name == "spark" and seeded and not order_columns:
+        raise ValueError("seeded Spark sampling requires order_by with unique stratum keys")
+    return backend.sample(
+        df,
+        by=by_columns,
+        fraction=fraction,
+        run_seed=seed_value,
+        order_by=order_columns,
     )
 
 
 def bootstrap(
-    df: DataFrame,
-    by: Sequence[str] | None = None,
+    df: Any,
+    by: ColumnArgument = None,
     n_replicas: int = 100,
-    checkpoint_dir: str = "/tmp/replicas/",
-) -> DataFrame:
-    """Generate bootstrap replicas of a Spark DataFrame.
+    checkpoint_dir: str | None = None,
+    *,
+    seed: int | None = None,
+    order_by: ColumnArgument = None,
+) -> Any:
+    """Return the original data and exact bootstrap replicas in long format.
 
-    Parameters
-    ----------
-    df : DataFrame
-        The input Spark DataFrame. Typically a predictions table — small
-        enough to broadcast — joined ahead of time with the (usually larger)
-        feature table if needed.
-    by : sequence of str, optional
-        Columns to stratify the sampling over. Defaults to no stratification.
-        For classifier evaluation, pass the label column to keep class balance
-        across replicas.
-    n_replicas : int, optional
-        Number of bootstrap replicas to generate. Defaults to 100.
-    checkpoint_dir : str, optional
-        Spark checkpoint directory. Defaults to `/tmp/replicas/`.
+    Replica ``-1`` is the original input and replicas ``0..n_replicas-1`` are
+    resampled independently within ``by`` strata. The input and result may be
+    pandas, Polars, or Spark DataFrames and always share the same native type.
 
-    Returns
-    -------
-    DataFrame
-        A long-format DataFrame with the same columns as the input plus a
-        `replica` column. Replica `-1` is the original (un-resampled) data;
-        replicas `0..n_replicas - 1` are the resamples.
-
-        The result is checkpointed — its random content will not change
-        between actions on it.
-
-    Notes
-    -----
-    Spark is lazy. A naive bootstrap (chained `union` calls without
-    materialization) builds a deferred plan, and every terminal action
-    re-rolls the random draws. The "replica 7" used to compute precision is
-    not the same "replica 7" used to compute recall. Downstream joins go
-    haywire; recall > 1 is a common symptom.
-
-    `checkpoint()` forces materialization to disk and replaces the lineage
-    with a read from that snapshot. After checkpoint, replica IDs are stable
-    across all downstream operations.
+    With a common unique ``order_by`` and seed, source-row multiplicities are
+    identical across backends. Spark results are eagerly checkpointed once;
+    local backends do not accept ``checkpoint_dir``.
     """
-    by = list(by or [])
-
-    bts = df.withColumn("replica", F.lit(-1))
-    for i in range(n_replicas):
-        bts = bts.union(sample(df, by).withColumn("replica", F.lit(i)))
-
-    # Materialize once. Without this, downstream metrics would not align.
-    spark = SparkSession.builder.getOrCreate()
-    spark.sparkContext.setCheckpointDir(checkpoint_dir)
-    return bts.checkpoint()
+    by_columns = normalize_columns(by, name="by")
+    order_columns = normalize_columns(order_by, name="order_by")
+    n_replicas = validate_n_replicas(n_replicas)
+    seed_value, seeded = run_seed(seed)
+    backend_name, backend = _backend(df)
+    validate_columns(
+        df.columns,
+        by=by_columns,
+        order_by=order_columns,
+        reject_replica=True,
+    )
+    if backend_name == "spark" and seeded and not order_columns:
+        raise ValueError("seeded Spark bootstrap requires order_by with unique stratum keys")
+    return backend.bootstrap(
+        df,
+        by=by_columns,
+        n_replicas=n_replicas,
+        checkpoint_dir=checkpoint_dir,
+        run_seed=seed_value,
+        order_by=order_columns,
+    )

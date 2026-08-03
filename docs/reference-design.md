@@ -46,14 +46,14 @@ Many thresholds map to a single recall value. This takes the upper envelope of
 the curve, which is the correct PR curve; averaging or taking the first row
 would draw a different, wrong curve.
 
-**`positives` / `negatives` / `unlabeled` totals joined onto every row**
-(`replicas/metrics.py:64-79`). This looks recomputable from the window function.
-It is not: `calculate_pr` filters `dTP > 0` first
-(`replicas/metrics.py:132`), and the recall denominator has to survive that
-filter as a materialized column.
+**`positives` / `negatives` / `unlabeled` totals materialized on every row.**
+The notebook joins them; the package's native adapters use transforms or
+windows. Either way this looks recomputable later, but it is not:
+`calculate_pr` filters `dTP > 0` first, and the recall denominator has to
+survive that filter as a materialized column.
 
-**Aggregating by score before the cumulative window**
-(`replicas/metrics.py:58-62`). Resampling with replacement makes the same row —
+**Aggregating by score before the cumulative window.** Resampling with
+replacement makes the same row —
 and therefore the same score — appear several times. Collapsing scores first is
 what makes `dTP` a count rather than a 0/1 flag. The toy data in cell 23 has
 deliberate ties (`0.95` twice, `0.36` three times) to exercise exactly this;
@@ -65,14 +65,17 @@ a specific gap. Cell 26's output gives precision `0.800` at threshold `0.90` and
 returns the *lower* threshold with the *higher* precision. Rounding the target
 to `0.8` or `0.9` makes the demo stop demonstrating that.
 
-**No seed in `sample`** (`replicas/bootstrap.py:47`). The function is called once
-per replica. A fixed seed would make every replica identical. Reproducibility
-belongs at the SparkContext level.
+**No seed in the notebook's `sample`.** The function is called once per
+replica. Reusing one fixed pandas seed in that loop would make every replica
+identical. The package now handles reproducibility differently: it resolves one
+run seed on the driver and derives an independent PCG64 stream for each
+`(stratum, replica)`. Seeding `SparkContext` does not seed NumPy inside Python
+workers, so it is not a package-level reproducibility mechanism.
 
-**`checkpoint()` in `bootstrap`** (`replicas/bootstrap.py:106`). The single
-load-bearing line in the library. Without it Spark re-rolls the random draws on
-every terminal action, "replica 7" differs between two metrics computed from the
-same DataFrame, and recall comes out greater than 1.
+**`checkpoint()` in `bootstrap`.** The single load-bearing line in the Spark
+implementation. Without it a non-deterministic implementation can re-roll the
+random draws on every terminal action, "replica 7" differs between two metrics
+computed from the same DataFrame, and recall comes out greater than 1.
 `tests/test_bootstrap.py::test_replicas_are_stable` and
 `::test_recall_never_exceeds_one` are the regression tests.
 
@@ -90,27 +93,33 @@ semantics. Not worth a diff.
 
 ## Where the library intentionally differs
 
-Four hardening changes. Everything else is a faithful port; treat any other
-divergence as a bug in the library.
+The package preserves the notebook's statistical outputs while hardening and
+generalizing its execution model.
 
 | Behavior | Notebook | Library |
 |---|---|---|
-| `confusion_table` with empty `group_by` | `join(totals, on=[])` fails | branches to `crossJoin` (`metrics.py:78-81`) |
-| `at` with no `group_by` | `orderBy(*[])` raises | guarded (`metrics.py:181`) |
-| `at` with 0 or 2+ conditions | silently uses the first | raises `ValueError` (`metrics.py:168`) |
-| checkpoint directory | hardcoded `/tmp/bootstraps/` | `checkpoint_dir` parameter, default `/tmp/replicas/` (`bootstrap.py:56`) |
+| dataframe backend | Spark only | native pandas, Polars, and Spark inputs and outputs |
+| reproducibility | implicit randomness in each pandas group | optional run seed, stable per-stratum/per-replica PCG64 draws |
+| deterministic Spark order | not defined | a supplied seed requires a unique `order_by` within every stratum |
+| bootstrap plan | one union and grouped pandas UDF per replica | one constant-depth grouped UDF plan; Arrow batches stream record batches on Spark 4.1+ |
+| null grouping keys in metrics | totals join can drop them | native transform/window totals preserve them |
+| empty `group_by` | some joins/windows fail | explicit ungrouped branches |
+| `at` with 0 or 2+ conditions | silently uses the first | raises `ValueError` |
+| checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses the local `/tmp/replicas/` fallback |
 
-The library also takes the `SparkSession` from
-`SparkSession.builder.getOrCreate()` rather than the notebook's module-level
-`spark` global (`bootstrap.py:104`).
+The Spark implementation uses the session attached to the input DataFrame and
+checkpoints eagerly once. Local backends are already eager and do not accept a
+checkpoint directory. The package documentation also corrects one prose error
+from the original port: complete average precision is found at the
+last/lowest retained threshold, not the first/highest one.
 
 ## Present in the notebook, absent from the library
 
 - **`plot_steps` / `plot_ci`** (cell 2) — the two figures that explain what
   bootstrap is before any Spark appears. No equivalent in `replicas.plotting`.
-- **Two-model comparison** faceted by `hue='name'` (cells 42-43) — the payoff of
-  the whole notebook, and untested in the library, whose fixtures use a single
-  model.
+- **Backend-neutral plotting** — computation is native on all three backends,
+  but the plotting helpers deliberately retain their existing pandas/Spark
+  behavior in this change.
 
 ## Deliberately out of scope
 
@@ -144,16 +153,16 @@ and their Spark implementation is subtle, not because metrics belong here.
 
 ## Derived work
 
-Read off the notebook, in the order worth doing:
+The two highest-priority items read from the notebook are now executable
+contracts rather than TODOs:
 
-1. **Golden-value tests from the committed outputs.** Cell 23's toy data with its
-   ties, cell 25's `dTP 2` at threshold `0.95`, and cell 27's operating point
-   (threshold `0.88` for `precision=0.81`) are published numbers the library
-   should be pinned to. Current fixtures in `tests/` use all-distinct scores and
-   one model, so tie collapsing and multi-model grouping have no coverage.
-2. **Single-pass `bootstrap`.** The notebook's loop over `union` is 101 scans of
-   the input and 100 shuffles at `n_replicas=100`. A `crossJoin` against replica
-   ids followed by one `applyInPandas` has constant plan depth. The output
-   contract — `replica` ids `-1..n-1`, per-stratum size preserved, checkpointed —
-   is unchanged, so this is an optimization of the reference rather than a
-   divergence from it.
+1. Golden tests pin the committed ties, totals, eleven-row PR curve, and the
+   `precision=.81` operating point at threshold `.88`, across every backend.
+2. Spark bootstrap construction has constant logical-plan depth and emits the
+   same exact, checkpointed replica contract without one union/shuffle branch
+   per replica.
+
+Follow-up designs remain deliberately separate: native multi-backend plotting,
+weighted/multiplicity output, Poisson bootstrap, and a pure-Spark indexed
+sampler. Each changes either the public representation or the readability of
+the core algorithm enough to deserve its own evidence and review.

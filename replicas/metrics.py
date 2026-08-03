@@ -1,183 +1,149 @@
-"""Precision-recall metrics on top of bootstrap replicas.
+"""Backend-neutral precision-recall metrics for bootstrap replicas.
 
-This module is one application of the bootstrap primitive in
-`replicas.bootstrap`. The same pattern — compute a metric, grouped by
-`replica` — extends to any classifier metric you care to compute.
+The public functions in this module accept pandas, Polars, or Spark DataFrames
+and return the same kind of DataFrame they receive.  Backend modules are loaded
+only when their DataFrame type is used, so importing :mod:`replicas.metrics`
+does not import every supported dataframe library.
 
 Data schema
 -----------
-The functions in this module expect a Spark DataFrame with four columns:
+``confusion_table`` expects four non-null columns:
 
-- `prediction` (double): the model's score, higher = more likely positive.
-- `positive` (int 0/1): row is a verified positive.
-- `negative` (int 0/1): row is a verified negative.
-- `unlabeled` (int 0/1): row has a prediction but no verified label.
+- ``prediction``: the model score; higher means more likely positive.
+- ``positive``: 1 for a verified positive, otherwise 0.
+- ``negative``: 1 for a verified negative, otherwise 0.
+- ``unlabeled``: 1 when no verified label is available, otherwise 0.
 
-The three label columns are mutually exclusive: each row has exactly one set
-to 1. `unlabeled` rows are tracked separately (as `UP` — unlabeled positives —
-in the confusion table) rather than silently treated as negative. This
-generalizes to multi-class by adding more label columns; the same logic
-applies.
+The three indicator columns are mutually exclusive.  Null values in grouping
+columns are supported and form an ordinary group.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
+from importlib import import_module
+from typing import Any, Optional, TypeVar
 
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
+FrameT = TypeVar("FrameT")
+# Keep public annotations in pre-PEP 604 form for the Python 3.9 floor.
+GroupBy = Optional[Sequence[str]]  # noqa: UP045
+
+_PREDICTION_COLUMNS = ("prediction", "positive", "negative", "unlabeled")
+_CONFUSION_COLUMNS = (
+    "threshold",
+    "TP",
+    "FP",
+    "UP",
+    "dTP",
+    "dFP",
+    "dUP",
+    "positives",
+    "negatives",
+    "unlabeled",
+)
+_BACKEND_MODULES = {
+    "pandas": "replicas._metrics_backends.pandas_backend",
+    "polars": "replicas._metrics_backends.polars_backend",
+    "pyspark": "replicas._metrics_backends.spark_backend",
+}
 
 
-def confusion_table(df: DataFrame, group_by: Sequence[str] | None = None) -> DataFrame:
-    """Build a per-threshold confusion table from a predictions DataFrame.
+def _backend(df: Any):
+    """Load the adapter matching *df* without importing optional backends."""
+    roots = {cls.__module__.partition(".")[0] for cls in type(df).__mro__}
+    for root, module_name in _BACKEND_MODULES.items():
+        if root in roots:
+            return import_module(module_name)
 
-    Parameters
-    ----------
-    df : DataFrame
-        Spark DataFrame with columns `prediction`, `positive`, `negative`,
-        `unlabeled`. See module docstring for schema details.
-    group_by : sequence of str, optional
-        Columns to group the calculation over. Typical values include `name`
-        (to compare models) and `replica` (to compute bootstrap CIs).
+    supported = "pandas.DataFrame, polars.DataFrame, or pyspark.sql.DataFrame"
+    raise TypeError(f"Unsupported dataframe type {type(df)!r}; expected {supported}")
 
-    Returns
-    -------
-    DataFrame
-        One row per (group, threshold), with columns:
 
-        - `threshold` : the prediction threshold θ
-        - `TP`, `FP`, `UP` : cumulative true / false / unlabeled positives at θ
-        - `dTP`, `dFP`, `dUP` : counts of rows at exactly this score
-        - `positives`, `negatives`, `unlabeled` : per-group totals
+def _groups(group_by: GroupBy) -> list[str]:
+    if group_by is None:
+        return []
+    if isinstance(group_by, (str, bytes)):
+        raise TypeError("group_by must be a sequence of column names, not a string")
+    try:
+        groups = list(group_by)
+    except TypeError as error:
+        raise TypeError("group_by must be a sequence of column names") from error
+    if any(not isinstance(column, str) for column in groups):
+        raise TypeError("group_by entries must be column names")
+
+    duplicates = [name for name, count in Counter(groups).items() if count > 1]
+    if duplicates:
+        raise ValueError(f"group_by contains duplicate columns: {duplicates}")
+    return groups
+
+
+def _validate_columns(df: Any, required: Sequence[str], groups: Sequence[str]) -> None:
+    columns = list(df.columns)
+    duplicates = [name for name, count in Counter(columns).items() if count > 1]
+    if duplicates:
+        raise ValueError(f"DataFrame contains duplicate columns: {duplicates}")
+
+    missing = [column for column in (*groups, *required) if column not in columns]
+    if missing:
+        raise ValueError(f"DataFrame is missing required columns: {missing}")
+
+
+def confusion_table(df: FrameT, group_by: GroupBy = None) -> FrameT:
+    """Build a per-threshold confusion table.
+
+    Scores tied at the same threshold are collapsed before cumulative counts
+    are calculated.  The returned columns are ``group_by`` followed by
+    ``threshold``, cumulative ``TP``/``FP``/``UP``, per-score
+    ``dTP``/``dFP``/``dUP``, and group totals
+    ``positives``/``negatives``/``unlabeled``.
+
+    pandas and Polars results are sorted by grouping columns ascending and
+    threshold descending.  As usual for Spark DataFrames, Spark row order is
+    unspecified unless the caller explicitly orders the result.
     """
-    group_by = list(group_by or [])
+    backend = _backend(df)
+    groups = _groups(group_by)
+    _validate_columns(df, _PREDICTION_COLUMNS, groups)
 
-    # Bootstrapping generates many ties: the same row sampled twice has the
-    # same prediction score. Aggregate by score first to collapse them.
-    df_by_score = df.groupBy(*group_by, "prediction").agg(
-        F.sum("positive").alias("dTP"),
-        F.sum("negative").alias("dFP"),
-        F.sum("unlabeled").alias("dUP"),
-    )
+    reserved = {*_PREDICTION_COLUMNS, *_CONFUSION_COLUMNS}
+    conflicts = [column for column in groups if column in reserved]
+    if conflicts:
+        raise ValueError(f"group_by columns conflict with confusion-table output: {conflicts}")
 
-    totals = df_by_score.groupBy(*group_by).agg(
-        F.sum("dTP").alias("positives"),
-        F.sum("dFP").alias("negatives"),
-        F.sum("dUP").alias("unlabeled"),
-    )
-
-    window = (
-        Window.partitionBy(*group_by)
-        .orderBy(F.col("prediction").desc())
-        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
-    )
-
-    # An empty group_by list confuses Spark's join, so use crossJoin for the
-    # ungrouped case (totals is then a single row, broadcast-safe).
-    if group_by:
-        joined = df_by_score.join(totals, on=group_by, how="inner")
-    else:
-        joined = df_by_score.crossJoin(totals)
-
-    return joined.withColumns(
-        {
-            "TP": F.sum("dTP").over(window),
-            "FP": F.sum("dFP").over(window),
-            "UP": F.sum("dUP").over(window),
-        }
-    ).select(
-        *group_by,
-        F.col("prediction").alias("threshold"),
-        "TP",
-        "FP",
-        "UP",
-        "dTP",
-        "dFP",
-        "dUP",
-        "positives",
-        "negatives",
-        "unlabeled",
-    )
+    return backend.confusion_table(df, groups)
 
 
-def calculate_pr(df: DataFrame, group_by: Sequence[str] | None = None) -> DataFrame:
-    """Compute precision, recall, and cumulative average precision per threshold.
+def calculate_pr(df: FrameT, group_by: GroupBy = None) -> FrameT:
+    """Add precision, recall, and cumulative average precision.
 
-    Parameters
-    ----------
-    df : DataFrame
-        Output of `confusion_table`.
-    group_by : sequence of str, optional
-        Same grouping columns used in `confusion_table`.
-
-    Returns
-    -------
-    DataFrame
-        Adds columns `precision`, `recall`, `average_precision` to the input.
-        Thresholds with no new true positives are filtered out (they do not
-        change the curve). The `average_precision` column is a running mean;
-        at the highest threshold it equals the standard area under the PR
-        curve.
+    Thresholds with no new true positives are omitted.  ``average_precision``
+    is a running, true-positive-weighted mean; only its last (lowest-threshold)
+    row in each group equals the standard area under the precision-recall
+    curve.
     """
-    group_by = list(group_by or [])
-
-    window = (
-        Window.partitionBy(*group_by)
-        .orderBy(F.col("threshold").desc())
-        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
-    )
-
-    return (
-        df.filter(F.col("dTP") > 0)
-        .withColumns(
-            {
-                "precision": F.col("TP") / (F.col("TP") + F.col("FP")),
-                "recall": F.col("TP") / F.col("positives"),
-            }
-        )
-        .withColumn(
-            "average_precision",
-            F.sum(F.col("dTP") * F.col("precision")).over(window) / F.col("TP"),
-        )
-    )
+    backend = _backend(df)
+    groups = _groups(group_by)
+    _validate_columns(df, _CONFUSION_COLUMNS, groups)
+    conflicts = [column for column in groups if column in _CONFUSION_COLUMNS]
+    if conflicts:
+        raise ValueError(f"group_by columns conflict with confusion-table metrics: {conflicts}")
+    return backend.calculate_pr(df, groups)
 
 
-def at(df: DataFrame, group_by: Sequence[str] | None = None, **kwargs) -> DataFrame:
-    """Find the minimum threshold satisfying a target metric condition, per group.
+def at(df: FrameT, group_by: GroupBy = None, **kwargs: Any) -> FrameT:
+    """Return the lowest threshold satisfying one ``metric >= value`` target.
 
-    Parameters
-    ----------
-    df : DataFrame
-        Output of `calculate_pr` (or any DataFrame with a `threshold` column
-        and the target metric column).
-    group_by : sequence of str, optional
-        Grouping columns.
-    **kwargs : dict
-        Exactly one key-value pair specifying the target, e.g.
-        `precision=0.95` or `recall=0.5`.
-
-    Returns
-    -------
-    DataFrame
-        One row per group: the row at the smallest threshold meeting the
-        target. With bootstrap replicas in the group, the output is a
-        *distribution* of operating points — the bootstrap CI on the
-        threshold you would deploy.
+    A group with no qualifying threshold is absent from the result.  With
+    replicas in ``group_by``, the result is a distribution of operating points.
     """
     if len(kwargs) != 1:
         raise ValueError(f"at() requires exactly one metric=value condition, got {len(kwargs)}")
 
-    group_by = list(group_by or [])
+    backend = _backend(df)
+    groups = _groups(group_by)
     metric, value = next(iter(kwargs.items()))
-
-    window_spec = Window.partitionBy(*group_by).orderBy(F.asc("threshold"))
-    result = (
-        df.filter(F.col(metric) >= value)
-        .withColumn("_row", F.row_number().over(window_spec))
-        .filter(F.col("_row") == 1)
-        .drop("_row")
-    )
-    if group_by:
-        result = result.orderBy(*group_by)
-    return result
+    _validate_columns(df, ("threshold", metric), groups)
+    if "threshold" in groups:
+        raise ValueError("threshold cannot also be a group_by column")
+    return backend.at(df, groups, metric, value)

@@ -1,9 +1,10 @@
 """Visualization helpers for bootstrap metrics.
 
 Optional module — requires `matplotlib` and `seaborn`. Install with the
-`plot` extra:
+`plot` extra; `plot_pr` additionally needs the `spark` extra:
 
     pip install replicas[plot]
+    pip install replicas[spark,plot]
 
 For most users, the metrics output is fed into their own plotting code. These
 helpers cover the two plots that appear in every bootstrap-CI report: a box
@@ -13,18 +14,33 @@ plot of operating-point metrics, and a PR curve with a confidence band.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-try:
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-except ImportError as e:  # pragma: no cover
-    raise ImportError(
-        "replicas.plotting requires matplotlib and seaborn. "
-        "Install with: pip install 'replicas[plot]'"
-    ) from e
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame
 
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
+
+def _plot_dependencies():
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except ImportError as exc:  # pragma: no cover - exercised in an isolated install
+        raise ImportError(
+            "replicas.plotting requires matplotlib and seaborn. "
+            "Install with: pip install 'replicas[plot]'"
+        ) from exc
+    return plt, sns
+
+
+def _spark_functions():
+    try:
+        from pyspark.sql import functions as F
+    except ImportError as exc:  # pragma: no cover - exercised in an isolated install
+        raise ImportError(
+            "replicas.plotting.plot_pr requires PySpark. "
+            "Install with: pip install 'replicas[spark,plot]'"
+        ) from exc
+    return F
 
 
 def box_plot(
@@ -51,6 +67,8 @@ def box_plot(
     **kwargs
         Forwarded to `sns.catplot`.
     """
+    _, sns = _plot_dependencies()
+
     values = list(values)
     id_vars = [v for v in (hue, row, col) if v is not None] + ["replica"]
     df_long = df.melt(
@@ -106,6 +124,9 @@ def plot_pr(
     **kwargs
         Forwarded to `sns.FacetGrid`.
     """
+    plt, sns = _plot_dependencies()
+    F = _spark_functions()
+
     low = 0.5 - ci / 2
     high = 0.5 + ci / 2
 
