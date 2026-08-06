@@ -1,6 +1,7 @@
 # replicas
 
-Bootstrap confidence intervals for classifier metrics, on Spark.
+Bootstrap confidence intervals for classifier metrics on pandas, Polars, and
+Spark.
 
 Most ML evaluation pipelines hand you a single number — precision = 0.873,
 recall = 0.612, AUC = 0.94 — and walk away. Those numbers are point estimates.
@@ -14,12 +15,10 @@ replica. The spread tells you the uncertainty.
 
 ## Why this exists
 
-There are bootstrap libraries for pandas. There are PR-curve libraries for
-sklearn. There is no good library for bootstrapped classifier metrics on
-**production-scale** data — tens or hundreds of millions of test rows, many
-models, stratified by country / segment / time window. A Python loop over
-`sklearn.utils.resample` takes hours. The functions here process all
-models × all replicas × all groups in one distributed Spark pass.
+Most bootstrap tools make you choose between a convenient local workflow and
+a production-scale distributed one. `replicas` keeps the same small API on
+pandas, Polars, and Spark, and returns the same kind of dataframe it receives.
+Start locally, then move the same calculation to data already in Spark.
 
 There is a second reason. The obvious PySpark implementation has a bug.
 Spark is lazy: a naive chain of `union` calls builds a deferred plan, and
@@ -30,43 +29,113 @@ to encode the fix — a `checkpoint()` that materializes the replicas once.
 
 ## Install
 
+The base package contains the shared sampler. Install the extra for the
+dataframe backend you use:
+
 ```bash
-pip install replicas
+pip install 'replicas[pandas]'
+pip install 'replicas[polars]'
+pip install 'replicas[spark]'
 ```
+
+If the dataframe library is already installed, plain `pip install replicas`
+is sufficient. To install every backend, use `pip install 'replicas[all]'`.
 
 For plotting helpers:
 
 ```bash
 pip install 'replicas[plot]'
+# Spark PR plots need both extras:
+pip install 'replicas[spark,plot]'
 ```
 
 ## Quick start
 
 ```python
-from replicas import bootstrap, confusion_table, calculate_pr, at
+from replicas import bootstrap
 
-# `predictions` is a Spark DataFrame with columns:
-#   prediction (double), positive (0/1), negative (0/1), unlabeled (0/1), name (str)
-
-bts = bootstrap(predictions, by=['name', 'positive'], n_replicas=100)
-ct  = confusion_table(bts, group_by=['name', 'replica'])
-kpi = calculate_pr(ct,    group_by=['name', 'replica'])
-
-# Operating point: smallest threshold meeting target precision, per replica.
-op = at(kpi, group_by=['name', 'replica'], precision=0.95)
-
-# `op` is a distribution of thresholds, not a single number.
-op.toPandas().groupby('name')['threshold'].describe()
+# `predictions` may be a pandas, Polars, or Spark DataFrame.
+bts = bootstrap(
+    predictions,
+    by=["name", "positive"],
+    n_replicas=100,
+    seed=42,
+    order_by=["row_id"],
+)
 ```
 
-The bootstrap function is generic. Anything you can compute
-`groupBy('replica').agg(...)` becomes a distribution with a CI — AUC, F1,
-calibration error, expected calibration error, whatever you like. PR curves
-are the demo, not the point.
+`bts` has the same dataframe type as `predictions`. It contains the original
+data as replica `-1` and resampled replicas `0` through `99`. The
+precision-recall helpers preserve that native dataframe type too:
+
+```python
+from replicas import at, calculate_pr, confusion_table
+
+ct = confusion_table(bts, group_by=["name", "replica"])
+kpi = calculate_pr(ct, group_by=["name", "replica"])
+
+# Operating point: smallest threshold meeting target precision, per replica.
+op = at(kpi, group_by=["name", "replica"], precision=0.95)
+```
+
+`op` is a distribution of thresholds, not a single number. Summarize it with
+the native group-by operations of your dataframe backend.
+
+The bootstrap output is generic. Any statistic grouped by `replica` becomes a
+distribution with a CI — AUC, F1, calibration error, or your own domain
+metric. PR curves are the demo, not the point.
+
+## Core API
+
+```python
+sample(df, by=None, fraction=1.0, *, seed=None, order_by=None)
+
+bootstrap(
+    df,
+    by=None,
+    n_replicas=100,
+    checkpoint_dir=None,
+    *,
+    seed=None,
+    order_by=None,
+)
+```
+
+`by` and `order_by` accept one column name or a sequence. `sample` draws
+`round(group_size * fraction)` rows with replacement from every stratum.
+`bootstrap` accepts zero replicas, rejects negative counts, and appends
+`replica` after the input columns. Both functions reject an existing reserved
+`replica` column.
+`checkpoint_dir` applies only to Spark; local backends are already eager.
+
+## Backends and reproducibility
+
+`bootstrap` and `sample` choose a backend from the input dataframe. They do
+not convert between dataframe libraries. Sampling is exact within each
+stratum: every full-size replica contains the same number of rows from each
+stratum as the input.
+
+Pass an integer `seed` to repeat a draw. Pandas and Polars use their current
+row order when `order_by` is omitted. Spark has no intrinsic row order, so a
+seeded Spark bootstrap requires `order_by`; those columns must uniquely order
+rows within each stratum. Output row order itself is unspecified on every
+backend. With the same seed, strata, and unique ordering, equivalent inputs
+produce the same source-row multiplicities across backends.
+
+That cross-backend guarantee assumes the backends form the same strata and
+order them with the same semantics. pandas folds null and NaN grouping values
+into one missing-value stratum, while Polars and Spark can keep them separate.
+NaN values in `by` or `order_by` are therefore outside the parity guarantee;
+native grouping and sorting semantics take precedence. Distinct Polars and
+Spark null/NaN strata still receive distinct random streams.
+
+Spark 3.3--4.0 uses the pandas UDF fallback. PySpark's pandas transport can
+round-trip a floating NaN as null, so normalize missing floating values first
+when that distinction must survive sampling.
 
 ## Data convention
 
-The metrics functions expect three label columns plus a prediction:
+The metric functions expect three label columns plus a prediction:
 
 | column      | meaning                                              |
 |-------------|------------------------------------------------------|
@@ -86,7 +155,7 @@ threshold) so you can decide how to handle them at the metric level.
 This schema generalizes to multi-class: add one column per class, keep
 `unlabeled` for the rows you have not yet verified.
 
-## Why bootstrap, and why on Spark
+## Why bootstrap, and why Spark too
 
 **Bootstrap.** Works for any statistic. No distributional assumptions. Tells
 you what would have happened on a slightly different test set, which is the
@@ -97,20 +166,28 @@ model.
 wider than the bootstrap CI. Treat the bands as a lower bound on how much you
 should worry.)
 
-**Spark.** Because at production scale, a Python loop over `resample` is too
-slow. Because the data is already in Spark. Because comparing 5 models across
-20 segments with 100 replicas is 10,000 metric computations and you would
-like them in parallel.
+**Spark.** At production scale, a Python loop over local resamples is too slow
+and the data is often already distributed. Comparing 5 models across 20
+segments with 100 replicas is 10,000 metric computations that should run in
+parallel.
 
 ## The `checkpoint()` story
 
-The single most important line in this library is one call to `.checkpoint()`
-inside `bootstrap`. Without it, Spark's lazy evaluation re-rolls the random
-sampling on every terminal action. Two `.toPandas()` calls return two
-different sets of replicas under the same IDs. Joins between metrics produce
-recall > 1. The test suite has a regression test for exactly this
-(`test_recall_never_exceeds_one`). If you ever feel tempted to remove the
-checkpoint to save the I/O, run that test.
+The Spark backend checkpoints its output before returning it. Without that
+materialization, Spark's lazy evaluation can re-roll random sampling on every
+terminal action. Two `.toPandas()` calls then return different data under the
+same replica IDs, and joins between metrics can even produce recall greater
+than 1. The local backends are eager and need no checkpoint.
+
+## Reference design
+
+`examples/precision_recall.ipynb` is the notebook this library was ported from,
+committed as it was executed — the prose, the figures, and a worked
+credit-card-fraud comparison of two models. It is the specification, not a
+demo of the package: it defines every function inline so it runs in Colab with
+nothing installed. `docs/reference-design.md` records where the library
+intentionally differs from it, and which of its odd-looking details are
+load-bearing.
 
 ## Status
 

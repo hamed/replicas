@@ -1,16 +1,7 @@
-"""replicas — bootstrap confidence intervals for classifier metrics on Spark.
+"""Bootstrap confidence intervals for pandas, Polars, and Spark.
 
-The library gives you a long-format DataFrame of bootstrap replicas. What you
-do with them — precision-recall curves, AUC, F1, calibration — is up to you.
-
-Quick start
------------
-    from replicas import bootstrap, confusion_table, calculate_pr, at
-
-    bts = bootstrap(predictions, by=['name', 'positive'], n_replicas=100)
-    ct  = confusion_table(bts, group_by=['name', 'replica'])
-    kpi = calculate_pr(ct,   group_by=['name', 'replica'])
-    op  = at(kpi, group_by=['name', 'replica'], precision=0.95)
+The public API comes from lightweight dispatch modules. Importing
+:mod:`replicas` does not import any optional dataframe or plotting framework.
 """
 
 from replicas.bootstrap import bootstrap, sample

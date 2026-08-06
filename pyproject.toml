@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "replicas"
 version = "0.1.0"
-description = "Bootstrap confidence intervals for classifier metrics on Spark."
+description = "Bootstrap confidence intervals for pandas, Polars, and Spark."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Hamed Seyed-Allaei" },
 ]
@@ -17,30 +18,45 @@ keywords = [
     "confidence-intervals",
     "classifier-metrics",
     "precision-recall",
+    "pandas",
+    "polars",
     "pyspark",
     "machine-learning",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "pyspark>=3.3",
-    # PySpark warns on pandas >= 3.0 ("does not yet fully support"). Uncapped,
-    # the newest interpreter resolved to the least-supported pandas.
-    "pandas>=1.3,<3",
     "numpy>=1.21",
-    # bootstrap.sample() uses applyInPandas, which requires Arrow serialization.
-    "pyarrow>=4",
 ]
 
 [project.optional-dependencies]
+pandas = [
+    "pandas>=1.3",
+]
+polars = [
+    "polars>=1.0",
+]
+spark = [
+    "pyspark>=3.3",
+    # PySpark warns on pandas >= 3.0 ("does not yet fully support").
+    "pandas>=1.3,<3",
+    "pyarrow>=4",
+]
 plot = [
+    "matplotlib>=3.5",
+    "seaborn>=0.12",
+]
+all = [
+    "pandas>=1.3,<3",
+    "polars>=1.0",
+    "pyspark>=3.3",
+    "pyarrow>=4",
     "matplotlib>=3.5",
     "seaborn>=0.12",
 ]
@@ -50,6 +66,10 @@ dev = [
     # Pinned: lint results must match CI exactly, or the gate fails on a diff
     # you cannot reproduce locally.
     "ruff==0.16.0",
+    "pandas>=1.3,<3",
+    "polars>=1.0",
+    "pyspark>=3.3",
+    "pyarrow>=4",
     "matplotlib>=3.5",
     "seaborn>=0.12",
 ]
@@ -75,9 +95,18 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
-# Notebooks introduce imports next to the cell that first needs them, which is
-# the point of a narrative example.
-"examples/*.ipynb" = ["E402"]
+# The notebook is the reference design, kept as it was executed. Ruff lints it
+# as one module, which misreads three properties of a narrative notebook:
+#
+# E402  imports are introduced next to the cell that first needs them.
+# I001  cell-local import order is authored, not sorted; sorting it produces a
+#       diff on a file whose committed outputs would no longer match.
+# F811  the setup cell re-imports `np` and `plt` on purpose. The cell above it
+#       is marked "skip this cell, only for demonstration", so setup has to
+#       stand on its own — `plot_pr` calls `plt.fill_between`. Ruff sees a
+#       redefinition; a reader who skips as instructed sees a NameError once
+#       the "redundant" import is removed.
+"examples/*.ipynb" = ["E402", "I001", "F811"]
 
 [tool.ruff.format]
 # Prose, not source. The formatter rewrites Python inside README code blocks
