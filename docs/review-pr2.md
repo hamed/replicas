@@ -12,13 +12,41 @@ green (6 checks), notebook JSON validated (49 cells, 13 with outputs — matches
 `docs/reference-design.md`), plus targeted repro scripts for every finding
 marked *reproduced*.
 
-## Follow-up status (2026-08-06)
+## Follow-up status (2026-08-06, amended 2026-08-07)
 
-The two confirmed bugs below were fixed with cross-backend regression tests.
-The Spark null flags were intentionally retained: null and NaN now derive
-different streams, so the flags are required to recover Spark nulls after the
-pandas UDF path presents numeric null keys as NaN. The remaining suggestions
-are still review notes rather than completed work.
+Commit `f36e399` fixed the two confirmed bugs below with cross-backend
+regression tests. The Spark null flags were intentionally retained: null and
+NaN now derive different streams (`b"n"` vs `b"N"`), so the flags are required
+to recover Spark nulls after the pandas UDF path presents numeric null keys as
+NaN. Because of that stream split, the pre-fix analysis in sections 2, 3.1,
+and 5.5 is superseded — each carries an inline resolution note below.
+
+The same commit also shipped work beyond the two bugs:
+
+- item 4.1 — `group_by` now accepts a plain string (`metrics.py`), tests
+  rewritten to use it;
+- case-insensitive helper-column collision checks in the Spark sampling
+  backend (Spark resolves column names case-insensitively — a hazard the
+  review missed);
+- Spark metrics `at()` helper renamed from bare `_row` to a collision-proof
+  generated name, with tests;
+- pandas `calculate_pr` no longer materializes a `_weighted_precision` helper
+  column, so a user column of that name survives, with tests.
+
+All other unticked items remain open review notes.
+
+### Verification (2026-08-07)
+
+Fix commit adversarially verified: full suite `91 passed` (was 66), ruff
+check/format clean; bug 1.1 repro now raises on pandas and Polars, `at()`
+metric-as-group-column deliberately allowed and tested; bug 1.2 fingerprints
+identical across pandas float64 / Polars Int64 / Spark long strata, and the
+same probe run against the parent commit still fails, proving the fix
+load-bearing; null-vs-NaN streams verified distinct end-to-end on Polars and
+on Spark under both engines (pyspark 4.2.0, arrow and forced pandas UDF);
+signed-zero folding (`-0.0` → `b"i0"`) matches how every backend groups signed
+zeros, so no stream collision exists; helper-column casefold and user-column
+preservation verified on live Spark bootstraps.
 
 ---
 
@@ -73,6 +101,15 @@ integer strata.
 
 ## 2. Provably inert mechanism — delete
 
+> **Resolution (f36e399): retained intentionally, now load-bearing.** The
+> analysis below was correct at review time — under the old encoding both
+> null and NaN mapped to `b"n"`, making the flags inert. The fix split the
+> streams (`b"n"` vs `b"N"`), and on the pandas-UDF engine (the only engine
+> on Spark 3.3–4.0) a numeric null key arrives as NaN, so the flag is now the
+> only way to route a null stratum to the null stream. The Arrow engine would
+> not need the flags (null keys arrive as None), but the floor engine does.
+> Section text below kept as written for the record.
+
 **Spark null-flag grouping machinery** (`replicas/_backends/spark.py:58-72`).
 Every grouping key is doubled with an `isNull` flag so `_group_key` can
 distinguish Spark null from real NaN. But:
@@ -87,16 +124,18 @@ shuffle keys, the `_group_key` slicing arithmetic, the `keys[-1]` convention.
 Removing it collapses `_grouping_columns` to `[df[c] for c in by]`. Existing
 parity tests prove behavior unchanged.
 
-- [ ] delete flags, simplify `_group_key`
+- [x] resolved differently: flags retained and made load-bearing by the
+      `b"n"`/`b"N"` stream split; deletion no longer applicable
 
 ---
 
 ## 3. Simplifications (behavior-preserving)
 
-1. **`_is_null` → IEEE definition** (`replicas/_sampling.py:93-105`): replace
-   pandas module-name sniffing with `value is None or value != value` guarded
-   by `except TypeError: return True` (covers `pd.NA`, whose bool coercion
-   raises; `NaT != NaT` is already true). Shorter and strictly more general.
+1. ~~**`_is_null` → IEEE definition**~~ **Withdrawn (f36e399):** the fix made
+   NaN a distinct stream from null, so `_is_null` must *not* fold `x != x`
+   values into the null case anymore. The module-name sniffing now carries
+   real semantics (logical null sentinels only); the IEEE one-liner would
+   reintroduce the folding the fix removed.
 2. **Ungrouped pandas totals** (`replicas/_metrics_backends/pandas_backend.py:58-62`):
    pandas broadcasts scalars — `result[target] = result[source].sum()` replaces
    the hand-built repeated-sum DataFrame.
@@ -129,10 +168,9 @@ parity tests prove behavior unchanged.
 
 ## 4. API intuitiveness
 
-1. **`group_by` rejects the plain string `by` accepts** —
-   `sample(df, by="stratum")` works, `confusion_table(df, group_by="name")`
-   raises (`metrics.py:66-67`). First thing a user hits between step 1 and
-   step 2 of the quick start. Accept a single string. Non-breaking.
+1. **`group_by` rejects the plain string `by` accepts** — **done in
+   f36e399**: `GroupBy` now accepts `str`, `_groups` normalizes it, bytes get
+   an explicit `TypeError`, tests rewritten to the string form.
 2. **`by` vs `group_by`** — two names for one concept across a 5-function API.
    Pick one (pandas precedent: `by`), alias the other. Cheapest now, at 0.1.
 3. **`order_by` reads as output ordering** — SQL instinct; actually it defines
@@ -172,13 +210,15 @@ dispatch.
    documented limitation line.
 4. **Head commit `73b0632` has no message body** — thin for a 4.9k-line
    change, given how carefully the three docs commits are written.
-5. Edge notes, doc-line severity: NaN and null strata share one PCG stream
-   (both encode `b"n"`), and pandas merges None+NaN into one group where
-   Polars keeps two; float `order_by` columns containing NaN sort differently
-   across backends (pandas: missing-first; polars/arrow: value ordering);
-   `order_by` uniqueness is a documented but unverified contract — violation
-   on Spark is silent nondeterminism; local `replica` dtype is int64 vs
-   Spark's int32.
+5. Edge notes, doc-line severity — **partially superseded by f36e399**: the
+   shared-stream claim is now false (null and NaN strata derive distinct
+   streams, `b"n"` vs `b"N"`), and the README gained a parity-caveat
+   paragraph covering NaN in `by`/`order_by` — exactly what this item asked
+   for. Still standing: float `order_by` columns containing NaN sort
+   differently across backends (pandas: missing-first; polars/arrow: value
+   ordering); `order_by` uniqueness is a documented but unverified contract —
+   violation on Spark is silent nondeterminism; local `replica` dtype is
+   int64 vs Spark's int32.
 
 ---
 
