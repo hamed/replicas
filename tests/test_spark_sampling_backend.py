@@ -32,7 +32,11 @@ def _fingerprint(df):
     )
 
 
-def test_arrow_iterator_feature_detection():
+def test_arrow_iterator_feature_detection(monkeypatch):
+    # This test isolates the version gate. Spark 3.3's GroupedData correctly
+    # lacks applyInArrow, while Spark 4.1+ supplies it.
+    monkeypatch.setattr(spark_backend.GroupedData, "applyInArrow", object(), raising=False)
+
     assert not spark_backend._supports_arrow_iterator("3.5.6")
     assert not spark_backend._supports_arrow_iterator("4.0.1")
     assert spark_backend._supports_arrow_iterator("4.1.0")
