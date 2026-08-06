@@ -23,11 +23,11 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from importlib import import_module
-from typing import Any, Optional, TypeVar
+from typing import Any, Optional, TypeVar, Union
 
 FrameT = TypeVar("FrameT")
 # Keep public annotations in pre-PEP 604 form for the Python 3.9 floor.
-GroupBy = Optional[Sequence[str]]  # noqa: UP045
+GroupBy = Optional[Union[str, Sequence[str]]]  # noqa: UP007, UP045
 
 _PREDICTION_COLUMNS = ("prediction", "positive", "negative", "unlabeled")
 _CONFUSION_COLUMNS = (
@@ -42,6 +42,7 @@ _CONFUSION_COLUMNS = (
     "negatives",
     "unlabeled",
 )
+_PR_COLUMNS = ("precision", "recall", "average_precision")
 _BACKEND_MODULES = {
     "pandas": "replicas._metrics_backends.pandas_backend",
     "polars": "replicas._metrics_backends.polars_backend",
@@ -63,12 +64,14 @@ def _backend(df: Any):
 def _groups(group_by: GroupBy) -> list[str]:
     if group_by is None:
         return []
-    if isinstance(group_by, (str, bytes)):
-        raise TypeError("group_by must be a sequence of column names, not a string")
+    if isinstance(group_by, str):
+        return [group_by]
+    if isinstance(group_by, bytes):
+        raise TypeError("group_by must contain column names as strings, not bytes")
     try:
         groups = list(group_by)
     except TypeError as error:
-        raise TypeError("group_by must be a sequence of column names") from error
+        raise TypeError("group_by must be a column name or a sequence of column names") from error
     if any(not isinstance(column, str) for column in groups):
         raise TypeError("group_by entries must be column names")
 
@@ -125,7 +128,8 @@ def calculate_pr(df: FrameT, group_by: GroupBy = None) -> FrameT:
     backend = _backend(df)
     groups = _groups(group_by)
     _validate_columns(df, _CONFUSION_COLUMNS, groups)
-    conflicts = [column for column in groups if column in _CONFUSION_COLUMNS]
+    reserved = {*_CONFUSION_COLUMNS, *_PR_COLUMNS}
+    conflicts = [column for column in groups if column in reserved]
     if conflicts:
         raise ValueError(f"group_by columns conflict with confusion-table metrics: {conflicts}")
     return backend.calculate_pr(df, groups)

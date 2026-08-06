@@ -12,6 +12,14 @@ green (6 checks), notebook JSON validated (49 cells, 13 with outputs — matches
 `docs/reference-design.md`), plus targeted repro scripts for every finding
 marked *reproduced*.
 
+## Follow-up status (2026-08-06)
+
+The two confirmed bugs below were fixed with cross-backend regression tests.
+The Spark null flags were intentionally retained: null and NaN now derive
+different streams, so the flags are required to recover Spark nulls after the
+pandas UDF path presents numeric null keys as NaN. The remaining suggestions
+are still review notes rather than completed work.
+
 ---
 
 ## 1. Correctness — confirmed bugs (both reproduced)
@@ -25,7 +33,7 @@ marked *reproduced*.
 Repro:
 
 ```python
-calculate_pr(ct, group_by=["precision"])   # no error
+calculate_pr(ct, group_by=["precision"])  # no error
 ```
 
 The grouping column is overwritten with computed precision **before** the
@@ -36,8 +44,8 @@ overwritten float values — silently wrong numbers, no exception.
 `("precision", "recall", "average_precision")`. The same family applies to
 `at()` when the metric kwarg names a group column.
 
-- [ ] fix conflict check
-- [ ] add regression test
+- [x] fix conflict check
+- [x] add regression test
 
 ### 1.2 Cross-backend parity silently breaks for integer strata containing a null
 
@@ -58,8 +66,8 @@ integer strata.
    no new collision.
 2. document the dtype-equivalence requirement explicitly.
 
-- [ ] pick option, implement
-- [ ] add cross-backend parity test with nullable-int strata
+- [x] pick option, implement
+- [x] add cross-backend parity test with nullable-int strata
 
 ---
 

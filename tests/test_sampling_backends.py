@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections import Counter
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from replicas._sampling import canonical_group_key, draw_indices
 from replicas.bootstrap import bootstrap, sample
 
 
@@ -123,6 +125,91 @@ def test_sampling_rejects_duplicate_dataframe_columns():
     frame = pd.DataFrame([[1, 2]], columns=["value", "value"])
     with pytest.raises(ValueError, match="duplicate column"):
         sample(frame)
+
+
+def test_canonical_keys_normalize_numeric_types_but_distinguish_null_and_nan():
+    assert canonical_group_key(1) == canonical_group_key(1.0)
+    assert canonical_group_key(None) != canonical_group_key(float("nan"))
+    assert canonical_group_key(float("nan")) == canonical_group_key(np.float32("nan"))
+    assert canonical_group_key(None) == canonical_group_key(np.datetime64("NaT", "ns"))
+
+
+def test_pandas_collapsed_missing_group_uses_the_null_stream():
+    frame = pd.DataFrame(
+        {"row_id": [0, 1], "stratum": [None, float("nan")]},
+    )
+    result = sample(frame, by="stratum", seed=9, order_by="row_id")
+
+    assert Counter(result["row_id"]) == Counter(draw_indices(2, 9, (None,)).tolist())
+
+
+def test_polars_null_and_nan_strata_use_distinct_seed_streams():
+    pl = pytest.importorskip("polars")
+    frame = pl.DataFrame(
+        {
+            "row_id": [0, 1, 2, 3, 4, 5],
+            "stratum": [None, None, None, float("nan"), float("nan"), float("nan")],
+        }
+    )
+    seed = 0
+    sampled_ids = sample(
+        frame,
+        by="stratum",
+        seed=seed,
+        order_by="row_id",
+    )["row_id"].to_list()
+
+    actual_null = Counter(row_id for row_id in sampled_ids if row_id < 3)
+    actual_nan = Counter(row_id - 3 for row_id in sampled_ids if row_id >= 3)
+    expected_null = Counter(draw_indices(3, seed, (None,)).tolist())
+    expected_nan = Counter(draw_indices(3, seed, (float("nan"),)).tolist())
+
+    assert expected_null != expected_nan
+    assert actual_null == expected_null
+    assert actual_nan == expected_nan
+
+
+def test_native_nullable_integer_strata_match_all_backends(spark):
+    pl = pytest.importorskip("polars")
+    values = {
+        "row_id": [0, 1, 2, 3, 4, 5],
+        "stratum": [1, 1, 2, 2, None, None],
+    }
+    pandas_frame = pd.DataFrame(values)
+    polars_frame = pl.DataFrame(values)
+    spark_frame = spark.createDataFrame(
+        list(zip(values["row_id"], values["stratum"])),
+        "row_id long, stratum long",
+    )
+
+    assert str(pandas_frame["stratum"].dtype) == "float64"
+    assert polars_frame.schema["stratum"] == pl.Int64
+
+    pandas_rows = sample(
+        pandas_frame,
+        by="stratum",
+        seed=0,
+        order_by="row_id",
+    )["row_id"].tolist()
+    polars_rows = sample(
+        polars_frame,
+        by="stratum",
+        seed=0,
+        order_by="row_id",
+    )["row_id"].to_list()
+    spark_rows = [
+        row["row_id"]
+        for row in sample(
+            spark_frame,
+            by="stratum",
+            seed=0,
+            order_by="row_id",
+        )
+        .select("row_id")
+        .collect()
+    ]
+
+    assert Counter(pandas_rows) == Counter(polars_rows) == Counter(spark_rows)
 
 
 def test_polars_matches_seeded_pandas_multiplicities(pandas_frame):

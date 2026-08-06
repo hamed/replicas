@@ -91,6 +91,7 @@ def target_size(size: int, fraction: float) -> int:
 
 
 def _is_null(value: Any) -> bool:
+    """Recognize logical null sentinels without folding IEEE NaN into them."""
     if value is None:
         return True
     value_type = type(value)
@@ -99,27 +100,27 @@ def _is_null(value: Any) -> bool:
         "NaTType",
     }:
         return True
-    try:
-        return isinstance(value, Real) and math.isnan(float(value))
-    except (TypeError, ValueError):
-        return False
+    return False
 
 
 def _canonical_value(value: Any) -> bytes:
     """Encode common scalar group keys identically across dataframe libraries."""
-    if _is_null(value):
-        return b"n"
-
     # NumPy scalars expose ``item``; converting them is what makes pandas,
     # Polars, and Spark keys share one representation.
     if type(value).__module__.startswith("numpy") and hasattr(value, "item"):
         value = value.item()
 
+    if _is_null(value):
+        return b"n"
     if isinstance(value, bool):
         return b"b1" if value else b"b0"
     if isinstance(value, Integral):
         return b"i" + str(int(value)).encode("ascii")
     if isinstance(value, float):
+        if math.isnan(value):
+            return b"N"
+        if value.is_integer():
+            return b"i" + str(int(value)).encode("ascii")
         return b"f" + struct.pack(">d", value)
     if isinstance(value, Decimal):
         return b"d" + str(value.normalize()).encode("ascii")

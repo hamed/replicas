@@ -122,6 +122,17 @@ rows within each stratum. Output row order itself is unspecified on every
 backend. With the same seed, strata, and unique ordering, equivalent inputs
 produce the same source-row multiplicities across backends.
 
+That cross-backend guarantee assumes the backends form the same strata and
+order them with the same semantics. pandas folds null and NaN grouping values
+into one missing-value stratum, while Polars and Spark can keep them separate.
+NaN values in `by` or `order_by` are therefore outside the parity guarantee;
+native grouping and sorting semantics take precedence. Distinct Polars and
+Spark null/NaN strata still receive distinct random streams.
+
+Spark 3.3--4.0 uses the pandas UDF fallback. PySpark's pandas transport can
+round-trip a floating NaN as null, so normalize missing floating values first
+when that distinction must survive sampling.
+
 ## Data convention
 
 The metric functions expect three label columns plus a prediction:

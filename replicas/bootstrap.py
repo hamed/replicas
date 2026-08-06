@@ -86,9 +86,9 @@ def bootstrap(
     resampled independently within ``by`` strata. The input and result may be
     pandas, Polars, or Spark DataFrames and always share the same native type.
 
-    With a common unique ``order_by`` and seed, source-row multiplicities are
-    identical across backends. Spark results are eagerly checkpointed once;
-    local backends do not accept ``checkpoint_dir``.
+    With equivalent native strata, a common unique ``order_by``, and a seed,
+    source-row multiplicities are identical across backends. Spark results are
+    eagerly checkpointed once; local backends do not accept ``checkpoint_dir``.
     """
     by_columns = normalize_columns(by, name="by")
     order_columns = normalize_columns(order_by, name="order_by")

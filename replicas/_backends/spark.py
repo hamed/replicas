@@ -56,8 +56,8 @@ def _as_python(value: Any) -> Any:
 
 
 def _grouping_columns(df: DataFrame, by: tuple[str, ...]) -> list[Any]:
-    # The null flags let pandas distinguish a Spark null in a numeric grouping
-    # column (received as NaN) from a real NaN value.
+    # The null flags preserve Spark's distinction between a numeric null and
+    # NaN after applyInPandas represents both values as NaN in the group key.
     values = [df[column] for column in by]
     null_flags = [df[column].isNull() for column in by]
     return [*values, *null_flags]
@@ -145,9 +145,10 @@ def _sample_arrow(
 
 
 def _unique_helper_column(df: DataFrame, stem: str) -> str:
+    existing = {column.casefold() for column in df.columns}
     name = stem
     suffix = 0
-    while name in df.columns:
+    while name.casefold() in existing:
         suffix += 1
         name = f"{stem}_{suffix}"
     return name

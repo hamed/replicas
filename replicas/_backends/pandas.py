@@ -25,6 +25,12 @@ def _ordered(df: pd.DataFrame, order_by: tuple[str, ...]) -> pd.DataFrame:
     return df.sort_values(list(order_by), kind="mergesort", na_position="first")
 
 
+def _group_key(key: Any) -> tuple[Any, ...]:
+    """Normalize pandas' single missing-value group to the shared null key."""
+    values = key if isinstance(key, tuple) else (key,)
+    return tuple(None if bool(pd.isna(value)) else value for value in values)
+
+
 def _sample_replica(
     df: pd.DataFrame,
     *,
@@ -40,7 +46,7 @@ def _sample_replica(
         indices = draw_indices(
             len(source),
             run_seed,
-            key,
+            _group_key(key),
             replica,
             n_draws=target_size(len(source), fraction),
         )

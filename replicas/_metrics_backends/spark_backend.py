@@ -23,6 +23,16 @@ _CONFUSION_COLUMNS = [
 ]
 
 
+def _unique_helper_column(df: DataFrame, stem: str) -> str:
+    existing = {column.casefold() for column in df.columns}
+    name = stem
+    suffix = 0
+    while name.casefold() in existing:
+        suffix += 1
+        name = f"{stem}_{suffix}"
+    return name
+
+
 def confusion_table(df: DataFrame, group_by: Sequence[str]) -> DataFrame:
     by_score = df.groupBy(*group_by, "prediction").agg(
         F.sum("positive").alias("dTP"),
@@ -81,10 +91,11 @@ def at(
     metric: str,
     value: Any,
 ) -> DataFrame:
+    helper = _unique_helper_column(df, "__replicas_at_row")
     by_threshold = Window.partitionBy(*group_by).orderBy(F.col("threshold").asc_nulls_last())
     return (
         df.filter(F.col(metric) >= value)
-        .withColumn("_row", F.row_number().over(by_threshold))
-        .filter(F.col("_row") == 1)
-        .drop("_row")
+        .withColumn(helper, F.row_number().over(by_threshold))
+        .filter(F.col(helper) == 1)
+        .drop(helper)
     )

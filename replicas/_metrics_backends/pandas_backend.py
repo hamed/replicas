@@ -79,9 +79,15 @@ def calculate_pr(df: pd.DataFrame, group_by: Sequence[str]) -> pd.DataFrame:
     weighted_precision = result["dTP"] * result["precision"]
 
     if group_by:
-        result["_weighted_precision"] = weighted_precision
-        numerator = _grouped(result, group_by)["_weighted_precision"].cumsum()
-        result = result.drop(columns="_weighted_precision")
+        grouper = (
+            result[group_by[0]] if len(group_by) == 1 else [result[column] for column in group_by]
+        )
+        numerator = weighted_precision.groupby(
+            grouper,
+            dropna=False,
+            observed=True,
+            sort=False,
+        ).cumsum()
     else:
         numerator = weighted_precision.cumsum()
     result["average_precision"] = numerator / result["TP"]

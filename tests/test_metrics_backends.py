@@ -144,7 +144,7 @@ def _to_pandas(df, order_by=()):
 
 def test_notebook_golden_values(backend, spark):
     predictions = _frame(backend, NOTEBOOK_ROWS, NOTEBOOK_COLUMNS, spark)
-    table = confusion_table(predictions, group_by=["name"])
+    table = confusion_table(predictions, group_by="name")
     assert list(table.columns) == CONFUSION_COLUMNS
 
     table_pdf = _to_pandas(table, [("name", True), ("threshold", False)])
@@ -157,7 +157,7 @@ def test_notebook_golden_values(backend, spark):
     assert set(table_pdf["negatives"]) == {12}
     assert set(table_pdf["unlabeled"]) == {1}
 
-    metrics = calculate_pr(table, group_by=["name"])
+    metrics = calculate_pr(table, group_by="name")
     assert list(metrics.columns) == [
         *CONFUSION_COLUMNS,
         "precision",
@@ -174,7 +174,7 @@ def test_notebook_golden_values(backend, spark):
     assert final["threshold"] == pytest.approx(0.09)
     assert final["average_precision"] == pytest.approx(0.7709346008259051)
 
-    operating_point = _to_pandas(at(metrics, group_by=["name"], precision=0.81))
+    operating_point = _to_pandas(at(metrics, group_by="name", precision=0.81))
     assert len(operating_point) == 1
     assert operating_point.loc[0, "threshold"] == pytest.approx(0.88)
     assert operating_point.loc[0, "precision"] == pytest.approx(9 / 11)
@@ -299,13 +299,93 @@ def test_empty_input_preserves_native_type_and_output_schema(backend, spark):
     assert _to_pandas(operating_points).empty
 
 
+@pytest.mark.parametrize("metric", ["precision", "recall", "average_precision"])
+def test_calculate_pr_rejects_group_columns_it_would_overwrite(backend, spark, metric):
+    columns = [metric, *CONFUSION_COLUMNS[1:]]
+    rows = [("cohort", 0.9, 1, 0, 0, 1, 0, 0, 1, 0, 0)]
+    table = _frame(backend, rows, columns, spark)
+
+    with pytest.raises(ValueError, match="conflict"):
+        calculate_pr(table, group_by=metric)
+
+
+def test_calculate_pr_preserves_user_columns_named_like_old_pandas_helper(backend, spark):
+    columns = [*CONFUSION_COLUMNS, "_weighted_precision"]
+    rows = [
+        ("model", 0.9, 1, 0, 0, 1, 0, 0, 2, 1, 0, 11),
+        ("model", 0.8, 2, 0, 0, 1, 0, 0, 2, 1, 0, 12),
+    ]
+    table = _frame(backend, rows, columns, spark)
+    metrics = calculate_pr(table, group_by="name")
+
+    assert list(metrics.columns) == [
+        *columns,
+        "precision",
+        "recall",
+        "average_precision",
+    ]
+    metrics_pdf = _to_pandas(metrics, [("threshold", False)])
+    assert metrics_pdf["_weighted_precision"].tolist() == [11, 12]
+
+
+def test_at_allows_target_metric_to_also_be_a_group_column(backend, spark):
+    columns = ["precision", "threshold", "payload"]
+    rows = [(0.8, 0.7, 1), (0.8, 0.5, 2), (0.9, 0.6, 3), (0.9, 0.4, 4)]
+    frame = _frame(backend, rows, columns, spark)
+    result = at(frame, group_by="precision", precision=0.85)
+
+    assert list(result.columns) == columns
+    result_pdf = _to_pandas(result, [("precision", True)])
+    assert result_pdf.to_dict("records") == [{"precision": 0.9, "threshold": 0.4, "payload": 4}]
+
+
+def test_at_preserves_columns_that_collide_with_spark_helper_names(backend, spark):
+    columns = [
+        "_row",
+        "threshold",
+        "precision",
+        "__replicas_at_row",
+        "__REPLICAS_AT_ROW_1",
+        "payload",
+    ]
+    rows = [
+        ("a", 0.7, 0.9, "keep-a1", "keep-case-a1", 1),
+        ("a", 0.5, 0.9, "keep-a2", "keep-case-a2", 2),
+        ("b", 0.6, 0.9, "keep-b1", "keep-case-b1", 3),
+        ("b", 0.4, 0.9, "keep-b2", "keep-case-b2", 4),
+    ]
+    frame = _frame(backend, rows, columns, spark)
+    result = at(frame, group_by="_row", precision=0.9)
+
+    assert list(result.columns) == columns
+    result_pdf = _to_pandas(result, [("_row", True)])
+    assert result_pdf.to_dict("records") == [
+        {
+            "_row": "a",
+            "threshold": 0.5,
+            "precision": 0.9,
+            "__replicas_at_row": "keep-a2",
+            "__REPLICAS_AT_ROW_1": "keep-case-a2",
+            "payload": 2,
+        },
+        {
+            "_row": "b",
+            "threshold": 0.4,
+            "precision": 0.9,
+            "__replicas_at_row": "keep-b2",
+            "__REPLICAS_AT_ROW_1": "keep-case-b2",
+            "payload": 4,
+        },
+    ]
+
+
 def test_metric_validation_is_backend_neutral(spark):
     df = pd.DataFrame(
         [(0.8, 1, 0, 0)],
         columns=["prediction", "positive", "negative", "unlabeled"],
     )
-    with pytest.raises(TypeError, match="not a string"):
-        confusion_table(df, group_by="name")
+    with pytest.raises(TypeError, match="not bytes"):
+        confusion_table(df, group_by=b"name")
     with pytest.raises(ValueError, match="duplicate"):
         confusion_table(df, group_by=["positive", "positive"])
     with pytest.raises(ValueError, match="conflict"):

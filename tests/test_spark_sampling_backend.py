@@ -8,6 +8,7 @@ import pytest
 from pyspark.sql import functions as F
 
 from replicas._backends import spark as spark_backend
+from replicas._sampling import draw_indices
 
 
 @pytest.fixture
@@ -36,6 +37,18 @@ def test_arrow_iterator_feature_detection():
     assert not spark_backend._supports_arrow_iterator("4.0.1")
     assert spark_backend._supports_arrow_iterator("4.1.0")
     assert spark_backend._supports_arrow_iterator("4.2.0.dev0")
+
+
+def test_helper_columns_respect_spark_case_insensitive_names(spark):
+    frame = spark.createDataFrame(
+        [(1, 2, 3)],
+        ["__REPLICAS_BATCH", "__replicas_batch_1", "__REPLICAS_REPLICA"],
+    )
+
+    assert spark_backend._unique_helper_column(frame, "__replicas_batch") == "__replicas_batch_2"
+    assert (
+        spark_backend._unique_helper_column(frame, "__replicas_replica") == "__replicas_replica_1"
+    )
 
 
 @pytest.mark.parametrize("engine", ["pandas", "arrow"])
@@ -87,6 +100,43 @@ def test_engines_have_identical_seeded_multiplicities(stratified_rows, tmp_path,
     )
 
     assert _fingerprint(pandas_result) == _fingerprint(arrow_result)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "arrow"])
+def test_null_and_nan_strata_use_distinct_seed_streams(spark, monkeypatch, engine):
+    if engine == "arrow" and not spark_backend._supports_arrow_iterator():
+        pytest.skip("Spark 4.1+ is required for the Arrow iterator engine")
+    monkeypatch.setattr(spark_backend, "_select_engine", lambda: engine)
+    rows = [
+        (0, None),
+        (1, None),
+        (2, None),
+        (3, float("nan")),
+        (4, float("nan")),
+        (5, float("nan")),
+    ]
+    frame = spark.createDataFrame(rows, "row_id long, stratum double")
+    seed = 0
+
+    sampled = spark_backend.sample(
+        frame,
+        by=("stratum",),
+        fraction=1.0,
+        run_seed=seed,
+        order_by=("row_id",),
+    )
+
+    sampled_ids = [row["row_id"] for row in sampled.select("row_id").collect()]
+    # Identify source groups by their disjoint row IDs. The pandas UDF transport
+    # itself may represent both Spark null and NaN as pandas NaN on output.
+    actual_null = Counter(row_id for row_id in sampled_ids if row_id < 3)
+    actual_nan = Counter(row_id - 3 for row_id in sampled_ids if row_id >= 3)
+    expected_null = Counter(draw_indices(3, seed, (None,)).tolist())
+    expected_nan = Counter(draw_indices(3, seed, (float("nan"),)).tolist())
+
+    assert expected_null != expected_nan
+    assert actual_null == expected_null
+    assert actual_nan == expected_nan
 
 
 def test_replica_batch_size_does_not_change_draws(stratified_rows, tmp_path, monkeypatch):
