@@ -81,9 +81,24 @@ op = at(kpi, group_by=["name", "replica"], precision=0.95)
 `op` is a distribution of thresholds, not a single number. Summarize it with
 the native group-by operations of your dataframe backend.
 
+For Spark results, `plot_pr` aggregates the replicas and draws the original
+curve together with a pointwise percentile band:
+
+```python
+from replicas.plotting import plot_pr
+
+plot_pr(kpi, hue="name", ci=0.90)
+```
+
+The same call accepts `row` and `col` for grouped arrays of plots. The
+quickstart below demonstrates a single curve and a row × column comparison.
+
 The bootstrap output is generic. Any statistic grouped by `replica` becomes a
 distribution with a CI — AUC, F1, calibration error, or your own domain
 metric. PR curves are the demo, not the point.
+
+For a complete, download-free walkthrough with confidence intervals and plots,
+open the [quickstart notebook](https://github.com/hamed/replicas/blob/main/examples/quickstart.ipynb).
 
 ## Core API
 
