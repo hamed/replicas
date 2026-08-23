@@ -90,3 +90,33 @@ def at(
     else:
         result = result.head(1)
     return result.select(columns)
+
+
+def pr_band(
+    df: pl.DataFrame,
+    by: Sequence[str],
+    low: float,
+    high: float,
+    recall_round: int | None,
+) -> pl.DataFrame:
+    frame = df
+    if recall_round is not None:
+        frame = frame.with_columns(pl.col("recall").round(recall_round))
+
+    keys = [*by, "recall"]
+    envelope = frame.group_by([*keys, "replica"]).agg(pl.col("precision").max())
+
+    original = envelope.filter(pl.col("replica") == -1).select(keys + ["precision"])
+    band = (
+        envelope.filter(pl.col("replica") >= 0)
+        .group_by(keys)
+        .agg(
+            # Polars defaults to "nearest"; pandas and Spark interpolate
+            # linearly, and the three have to agree.
+            pl.col("precision").quantile(low, interpolation="linear").alias("low"),
+            pl.col("precision").quantile(high, interpolation="linear").alias("high"),
+        )
+    )
+
+    result = original.join(band, on=keys, how="full", coalesce=True)
+    return result.sort(keys, nulls_last=True)

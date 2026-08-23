@@ -15,6 +15,12 @@ Only ``execute_result`` and ``display_data`` payloads are compared. ``stderr``
 streams carry Spark log lines with timestamps and host names, and every repr of
 a live object carries its address; both are normalized away or ignored.
 
+Figure dimensions are normalized away too. Matplotlib and seaborn move the
+pixel size of a figure between releases -- CI once produced ``730x600`` where
+this machine produced ``718x600``, purely from legend spacing -- so comparing
+them reports a dependency bump as a defect. The axes count in the same repr is
+kept: a facet that stops rendering, or a grid that changes shape, still fails.
+
 Usage:
 
     python scripts/check_example_notebook.py examples/quickstart.ipynb
@@ -31,10 +37,18 @@ from pathlib import Path
 import nbformat
 from nbclient import NotebookClient
 
-# `<seaborn.axisgrid.FacetGrid at 0x7f3c1a2b4d90>` and the `Figure size 450x...`
-# reprs embed a memory address that changes on every run.
-_ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
+# `<seaborn.axisgrid.FacetGrid at 0x7f3c1a2b4d90>` embeds a memory address that
+# changes on every run. The lookbehind matters: without it the `0x600` inside
+# `<Figure size 730x600 ...>` also matches, and the checker rewrites a figure
+# dimension into the address placeholder.
+_ADDRESS = re.compile(r"(?<![0-9A-Za-z])0x[0-9a-fA-F]+")
+# `<Figure size 718x600 with 1 Axes>` -> `<Figure size ... with 1 Axes>`.
+_FIGURE_SIZE = re.compile(r"(<Figure size )[\d.]+x[\d.]+( with )")
 _COMPARED = ("execute_result", "display_data")
+
+
+def _normalize(text: str) -> str:
+    return _FIGURE_SIZE.sub(r"\1...\2", _ADDRESS.sub("0xADDR", text))
 
 
 def _payloads(cell) -> list:
@@ -46,7 +60,7 @@ def _payloads(cell) -> list:
         text = output.get("data", {}).get("text/plain")
         if text:
             joined = text if isinstance(text, str) else "".join(text)
-            texts.append(_ADDRESS.sub("0xADDR", joined))
+            texts.append(_normalize(joined))
     return texts
 
 

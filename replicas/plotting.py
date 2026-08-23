@@ -1,10 +1,15 @@
 """Visualization helpers for bootstrap metrics.
 
 Optional module — requires `matplotlib` and `seaborn`. Install with the
-`plot` extra; `plot_pr` additionally needs the `spark` extra:
+`plot` extra:
 
     pip install replicas[plot]
-    pip install replicas[spark,plot]
+
+Both helpers take a pandas, Polars, or Spark DataFrame, like the rest of the
+package. Seaborn draws from pandas, so each one reduces the data on its own
+backend first and collects only the result. `plot_pr` does that through
+`replicas.metrics.pr_band`, which is public if you want the numbers without
+the picture.
 
 For most users, the metrics output is fed into their own plotting code. These
 helpers cover the two plots that appear in every bootstrap-CI report: a box
@@ -14,10 +19,9 @@ plot of operating-point metrics, and a PR curve with a confidence band.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import Any, Optional
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+from replicas.metrics import pr_band
 
 
 def _plot_dependencies():
@@ -32,15 +36,18 @@ def _plot_dependencies():
     return plt, sns
 
 
-def _spark_functions():
-    try:
-        from pyspark.sql import functions as F
-    except ImportError as exc:  # pragma: no cover - exercised in an isolated install
-        raise ImportError(
-            "replicas.plotting.plot_pr requires PySpark. "
-            "Install with: pip install 'replicas[spark,plot]'"
-        ) from exc
-    return F
+def _to_pandas(df: Any):
+    """Collect any supported dataframe to pandas, which is what seaborn reads.
+
+    Polars spells the conversion ``to_pandas`` and Spark spells it
+    ``toPandas``; a pandas frame has neither and passes straight through. This
+    runs after the backend has already reduced the data to plot size.
+    """
+    for name in ("toPandas", "to_pandas"):
+        collect = getattr(df, name, None)
+        if callable(collect):
+            return collect()
+    return df
 
 
 def _facet_title(row, col, separator: str) -> str | None:
@@ -66,9 +73,11 @@ def box_plot(
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        Usually the result of `at(...).toPandas()`. A `replica` column is
-        required: each box is the distribution of one metric across replicas.
+    df : pandas, Polars, or Spark DataFrame
+        Usually the result of `at(...)`. A `replica` column is required: each
+        box is the distribution of one metric across replicas. `at` has already
+        reduced the data to one row per group and replica, so this is collected
+        to pandas whole.
     row, col, hue : str, optional
         Faceting / coloring columns passed through to seaborn.
     kind : str
@@ -80,6 +89,7 @@ def box_plot(
     """
     _, sns = _plot_dependencies()
 
+    df = _to_pandas(df)
     if "replica" not in df.columns:
         raise ValueError(
             "box_plot requires a 'replica' column: every box is a distribution "
@@ -117,26 +127,27 @@ def box_plot(
 
 
 def plot_pr(
-    df: DataFrame,
+    df: Any,
     row=None,
     col=None,
     hue=None,
     ci: float = 0.9,
-    recall_round: int | None = None,
+    recall_round: Optional[int] = None,  # noqa: UP045
     **kwargs,
 ):
     """Precision-recall curve with a bootstrap confidence band.
 
     Parameters
     ----------
-    df : Spark DataFrame
-        Output of `calculate_pr` with a `replica` column.
+    df : pandas, Polars, or Spark DataFrame
+        Output of `calculate_pr` with a `replica` column. The band is computed
+        on that backend by `replicas.metrics.pr_band`, so only the reduced
+        curve is collected to pandas for drawing.
     row, col, hue : str, optional
         Faceting / coloring columns.
     ci : float
         Width of the confidence band (e.g. 0.9 for 5th-95th percentile). Must
-        lie in `(0, 1]`; a wider value would ask Spark for a percentile
-        outside `[0, 1]`.
+        lie in `(0, 1]`.
     recall_round : int, optional
         If set, round recall to this many decimals before aggregating across
         replicas. Useful on small datasets where the raw curve is noisy.
@@ -145,40 +156,14 @@ def plot_pr(
         Forwarded to `sns.FacetGrid`.
     """
     plt, sns = _plot_dependencies()
-    F = _spark_functions()
 
-    # Checked here rather than in Spark: an out-of-range ci only fails once
-    # percentile_approx runs, deep inside the plan and far from the caller.
-    if not 0 < ci <= 1:
-        raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")
+    by = [v for v in (hue, row, col) if v is not None]
+    band = _to_pandas(pr_band(df, by, ci=ci, recall_round=recall_round))
+    # Spark row order is unspecified, and a line plot needs the curve in
+    # recall order regardless of which backend produced it.
+    combined = band.sort_values([*by, "recall"], kind="mergesort").reset_index(drop=True)
 
-    low = 0.5 - ci / 2
-    high = 0.5 + ci / 2
-
-    by = [v for v in (hue, row, col) if v is not None] + ["recall"]
-
-    if recall_round is not None:
-        df = df.withColumn("recall", F.round("recall", recall_round))
-
-    df = df.groupBy(*by, "replica").agg(F.max("precision").alias("precision"))
-
-    original = df.filter(F.col("replica") == -1).toPandas().set_index(by).sort_index()
-
-    bts = (
-        df.filter(F.col("replica") >= 0)
-        .groupBy(by)
-        .agg(
-            F.percentile_approx("precision", low).alias("low"),
-            F.percentile_approx("precision", high).alias("high"),
-        )
-        .toPandas()
-        .set_index(by)
-        .sort_index()
-    )
-
-    combined = original.join(bts, how="outer")
-
-    g = sns.FacetGrid(combined.reset_index(), row=row, col=col, hue=hue, **kwargs)
+    g = sns.FacetGrid(combined, row=row, col=col, hue=hue, **kwargs)
     g.map_dataframe(plt.fill_between, "recall", "low", "high", alpha=0.1)
     g.map(sns.lineplot, "recall", "low", alpha=0.01)
     g.map(sns.lineplot, "recall", "high", alpha=0.01)

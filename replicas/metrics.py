@@ -50,6 +50,8 @@ _CONFUSION_COLUMNS = (
     "unlabeled",
 )
 _PR_COLUMNS = ("precision", "recall", "average_precision")
+_BAND_INPUT_COLUMNS = ("replica", "recall", "precision")
+_BAND_COLUMNS = ("recall", "precision", "low", "high")
 _BACKEND_MODULES = {
     "pandas": "replicas._metrics_backends.pandas_backend",
     "polars": "replicas._metrics_backends.polars_backend",
@@ -183,3 +185,62 @@ def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
     if "threshold" in groups:
         raise ValueError("threshold cannot also appear in by")
     return backend.at(df, groups, metric, value)
+
+
+def pr_band(
+    df: FrameT,
+    by: ByColumns = None,
+    *,
+    ci: float = 0.9,
+    recall_round: Optional[int] = None,  # noqa: UP045
+) -> FrameT:
+    """Reduce replicate PR curves to one curve with a confidence band.
+
+    Takes the output of :func:`calculate_pr` for a frame that carries a
+    ``replica`` column, and returns ``by`` followed by ``recall``,
+    ``precision``, ``low``, and ``high``.  ``precision`` is the original curve
+    (replica ``-1``); ``low`` and ``high`` are quantiles of the replica curves
+    at ``0.5 -/+ ci / 2``.  Either side is null where one is defined at a
+    recall value and the other is not.
+
+    Several rows can share a recall value inside one replica, so the highest
+    precision at each recall is taken first.  That upper envelope is the curve
+    a threshold sweep actually reaches.
+
+    This is the reduction behind :func:`replicas.plotting.plot_pr`, exposed on
+    its own because the band numbers are useful without the picture.  It runs
+    natively on each backend, so a large curve table is reduced to plot size
+    before anything is collected to the driver.
+
+    Parameters
+    ----------
+    ci : float
+        Width of the band, in ``(0, 1]``.  ``0.9`` gives the 5th and 95th
+        percentiles.
+    recall_round : int, optional
+        Round recall to this many decimals before the aggregation.  Replica
+        curves rarely share exact recall values on small data, so without it
+        the band can be sparse.  Leave it ``None`` on large data to keep the
+        resolution of the curve.
+
+    All three backends interpolate quantiles linearly, so equivalent input
+    gives equal band edges to within floating-point error.  pandas and Polars
+    results are sorted by ``by`` and then ``recall``; Spark row order is
+    unspecified, as usual.
+    """
+    if not 0 < ci <= 1:
+        raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")
+    if recall_round is not None and (
+        isinstance(recall_round, bool) or not isinstance(recall_round, int)
+    ):
+        raise TypeError("recall_round must be an integer or None")
+
+    backend = _backend(df)
+    groups = _groups(by)
+    _validate_columns(df, _BAND_INPUT_COLUMNS, groups)
+    reserved = {*_BAND_INPUT_COLUMNS, *_BAND_COLUMNS}
+    conflicts = [column for column in groups if column in reserved]
+    if conflicts:
+        raise ValueError(f"by conflicts with a column pr_band reads or produces: {conflicts}")
+
+    return backend.pr_band(df, groups, 0.5 - ci / 2, 0.5 + ci / 2, recall_round)

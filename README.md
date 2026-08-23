@@ -45,9 +45,10 @@ For plotting helpers:
 
 ```bash
 pip install 'replicas[plot]'
-# Spark PR plots need both extras:
-pip install 'replicas[spark,plot]'
 ```
+
+Both plot helpers take a pandas, Polars, or Spark DataFrame, so the `plot`
+extra is all you need on top of whichever backend you already have.
 
 ## Quick start
 
@@ -81,8 +82,8 @@ op = at(kpi, by=["name", "replica"], precision=0.95)
 `op` is a distribution of thresholds, not a single number. Summarize it with
 the native group-by operations of your dataframe backend.
 
-For Spark results, `plot_pr` aggregates the replicas and draws the original
-curve together with a pointwise percentile band:
+`plot_pr` reduces the replicas and draws the original curve together with a
+pointwise percentile band:
 
 ```python
 from replicas.plotting import plot_pr
@@ -92,6 +93,21 @@ plot_pr(kpi, hue="name", ci=0.90)
 
 The same call accepts `row` and `col` for grouped arrays of plots. The
 quickstart below demonstrates a single curve and a row × column comparison.
+
+Seaborn draws from pandas, so both helpers reduce the data on its own backend
+before they collect anything. `plot_pr` does that through `pr_band`, which is
+public if you want the band numbers without the picture:
+
+```python
+from replicas import pr_band
+
+band = pr_band(kpi, by="name", ci=0.90)  # name, recall, precision, low, high
+```
+
+All three backends interpolate the quantiles linearly, so equivalent input
+gives equal band edges. On Spark that needs `F.percentile`, which is why the
+`spark` extra requires PySpark 3.5: `percentile_approx` returns a different
+order statistic and shifts the band visibly against the other two.
 
 The bootstrap output is generic. Any statistic grouped by `replica` becomes a
 distribution with a CI — AUC, F1, calibration error, or your own domain
@@ -152,7 +168,7 @@ NaN values in `by` or `order_by` are therefore outside the parity guarantee;
 native grouping and sorting semantics take precedence. Distinct Polars and
 Spark null/NaN strata still receive distinct random streams.
 
-Spark 3.3--4.0 uses the pandas UDF fallback. PySpark's pandas transport can
+Spark 3.5--4.0 uses the pandas UDF fallback. PySpark's pandas transport can
 round-trip a floating NaN as null, so normalize missing floating values first
 when that distinction must survive sampling.
 

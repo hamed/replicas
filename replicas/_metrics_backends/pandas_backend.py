@@ -112,3 +112,33 @@ def at(
     else:
         result = result.head(1)
     return result[columns]
+
+
+def pr_band(
+    df: pd.DataFrame,
+    by: Sequence[str],
+    low: float,
+    high: float,
+    recall_round: int | None,
+) -> pd.DataFrame:
+    frame = df
+    if recall_round is not None:
+        frame = frame.assign(recall=frame["recall"].round(recall_round))
+
+    keys = [*by, "recall"]
+    envelope = (
+        frame.groupby([*keys, "replica"], dropna=False, observed=True, sort=False)["precision"]
+        .max()
+        .reset_index()
+    )
+
+    original = envelope.loc[envelope["replica"] == -1, [*keys, "precision"]]
+    band = (
+        envelope.loc[envelope["replica"] >= 0]
+        .groupby(keys, dropna=False, observed=True, sort=False)["precision"]
+        .agg(low=lambda values: values.quantile(low), high=lambda values: values.quantile(high))
+        .reset_index()
+    )
+
+    result = original.merge(band, on=keys, how="outer")
+    return result.sort_values(keys, kind="mergesort", na_position="last").reset_index(drop=True)

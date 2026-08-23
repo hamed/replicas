@@ -9,7 +9,7 @@ import pytest
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from replicas.metrics import at, calculate_pr, confusion_table
+from replicas.metrics import at, calculate_pr, confusion_table, pr_band
 
 NOTEBOOK_COLUMNS = ["prediction", "negative", "positive", "unlabeled", "name"]
 NOTEBOOK_ROWS = [
@@ -398,3 +398,87 @@ def test_metric_validation_is_backend_neutral(spark):
         at(df, precision=0.9, recall=0.5)
     with pytest.raises(TypeError, match="Unsupported dataframe"):
         confusion_table([{"prediction": 0.8}])
+
+
+def _replicated_curve(name, spark):
+    """A tiny PR table with an original curve and three replica curves.
+
+    Recall values repeat inside a replica so the upper-envelope step has
+    something to collapse, and the replica precisions at each recall are
+    spread so the quantiles are not all the same number.
+    """
+    rows = []
+    for replica, offset in ((-1, 0.00), (0, -0.06), (1, 0.00), (2, 0.06), (3, 0.12)):
+        for recall, precision in ((0.25, 0.80), (0.25, 0.74), (0.50, 0.70), (0.75, 0.60)):
+            rows.append(("model", replica, recall, round(precision + offset, 6)))
+    return _frame(name, rows, ["name", "replica", "recall", "precision"], spark)
+
+
+def test_pr_band_agrees_across_backends(backend, spark):
+    curve = _replicated_curve(backend, spark)
+
+    band = _to_pandas(pr_band(curve, "name", ci=0.5), [("recall", True)])
+
+    assert list(band.columns) == ["name", "recall", "precision", "low", "high"]
+    # The envelope keeps the highest precision at each recall, so 0.25 is 0.80
+    # for the original rather than 0.74.
+    assert band["recall"].tolist() == [0.25, 0.50, 0.75]
+    assert band["precision"].round(6).tolist() == [0.80, 0.70, 0.60]
+    # Replica precisions at recall 0.25 are 0.74, 0.80, 0.86, 0.92. A 50% band
+    # is the 0.25 and 0.75 quantiles, linearly interpolated: 0.785 and 0.875.
+    assert band.loc[0, "low"] == pytest.approx(0.785)
+    assert band.loc[0, "high"] == pytest.approx(0.875)
+    assert (band["low"] < band["high"]).all()
+
+
+def test_pr_band_rounds_recall_before_it_aggregates(backend, spark):
+    rows = []
+    for replica in (-1, 0, 1):
+        for recall in (0.2401, 0.2499):
+            rows.append(("model", replica, recall, 0.8))
+    curve = _frame(backend, rows, ["name", "replica", "recall", "precision"], spark)
+
+    raw = _to_pandas(pr_band(curve, "name"), [("recall", True)])
+    rounded = _to_pandas(pr_band(curve, "name", recall_round=2), [("recall", True)])
+
+    assert raw["recall"].tolist() == [0.2401, 0.2499]
+    assert rounded["recall"].tolist() == [0.24, 0.25]
+
+
+def test_pr_band_keeps_a_recall_only_the_replicas_reach(backend, spark):
+    rows = [("model", -1, 0.5, 0.7), ("model", 0, 0.5, 0.6), ("model", 1, 0.9, 0.4)]
+    curve = _frame(backend, rows, ["name", "replica", "recall", "precision"], spark)
+
+    band = _to_pandas(pr_band(curve, "name"), [("recall", True)])
+
+    assert band["recall"].tolist() == [0.5, 0.9]
+    # The original curve stops at 0.5, so the outer join leaves precision null
+    # at 0.9 rather than dropping the row the replicas reached.
+    assert pd.isna(band.loc[1, "precision"])
+    assert band.loc[1, "low"] == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error", "match"),
+    [
+        ({"ci": 0.0}, ValueError, "ci must be in the interval"),
+        ({"ci": 1.5}, ValueError, "ci must be in the interval"),
+        ({"recall_round": 1.5}, TypeError, "recall_round must be an integer"),
+    ],
+)
+def test_pr_band_validation(kwargs, error, match):
+    curve = _replicated_curve("pandas", None)
+    with pytest.raises(error, match=match):
+        pr_band(curve, "name", **kwargs)
+
+
+def test_pr_band_rejects_by_columns_it_would_overwrite():
+    curve = _replicated_curve("pandas", None)
+    with pytest.raises(ValueError, match="conflicts"):
+        pr_band(curve, "recall")
+
+
+def test_pr_band_requires_a_replica_column():
+    curve = _replicated_curve("pandas", None).drop(columns=["replica"])
+    with pytest.raises(ValueError, match="missing required columns"):
+        pr_band(curve, "name")

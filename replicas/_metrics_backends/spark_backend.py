@@ -99,3 +99,33 @@ def at(
         .filter(F.col(helper) == 1)
         .drop(helper)
     )
+
+
+def pr_band(
+    df: DataFrame,
+    by: Sequence[str],
+    low: float,
+    high: float,
+    recall_round: int | None,
+) -> DataFrame:
+    frame = df
+    if recall_round is not None:
+        frame = frame.withColumn("recall", F.round("recall", recall_round))
+
+    keys = [*by, "recall"]
+    envelope = frame.groupBy(*keys, "replica").agg(F.max("precision").alias("precision"))
+
+    original = envelope.filter(F.col("replica") == -1).select(*keys, "precision")
+    band = (
+        envelope.filter(F.col("replica") >= 0)
+        .groupBy(*keys)
+        .agg(
+            # percentile, not percentile_approx: the approximation returns a
+            # different order statistic, which puts the Spark band edges
+            # visibly off the pandas and Polars ones.
+            F.percentile("precision", low).alias("low"),
+            F.percentile("precision", high).alias("high"),
+        )
+    )
+
+    return original.join(band, on=keys, how="full_outer")

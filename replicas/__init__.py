@@ -8,7 +8,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _distribution_version
 
 from replicas.bootstrap import bootstrap, sample
-from replicas.metrics import at, calculate_pr, confusion_table
+from replicas.metrics import at, calculate_pr, confusion_table, pr_band
 
 try:
     __version__ = _distribution_version("replicas")
@@ -21,5 +21,6 @@ __all__ = [
     "sample",
     "confusion_table",
     "calculate_pr",
+    "pr_band",
     "at",
 ]

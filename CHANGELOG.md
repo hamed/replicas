@@ -25,6 +25,16 @@ All notable changes to `replicas` are documented here.
 
 ### Changed
 
+- **Breaking.** `box_plot` and `plot_pr` take a pandas, Polars, or Spark
+  DataFrame, like the rest of the package. `box_plot` was pandas-only and
+  `plot_pr` was Spark-only, so the two plot helpers demanded opposite
+  backends and a pandas user could not call `plot_pr` at all. Each one now
+  reduces the data on its own backend and collects only the result.
+- **Breaking.** The `spark` extra requires PySpark 3.5, up from 3.3. `pr_band`
+  uses `F.percentile`, added in 3.5. `percentile_approx` returns a different
+  order statistic -- on 100 replicas it put the 5th-percentile band edge 2.4%
+  off the pandas and Polars value, which is a visible shift in a plotted band,
+  not a rounding difference. Spark 3.3 and 3.4 are both past end of life.
 - **Breaking.** `confusion_table`, `calculate_pr`, and `at` take `by` instead
   of `group_by`. Every public function that partitions a computation by
   columns now uses the same name, matching `sample` and `bootstrap` and
@@ -45,6 +55,9 @@ All notable changes to `replicas` are documented here.
 
 ### Added
 
+- `pr_band(df, by=..., ci=..., recall_round=...)`, the reduction behind
+  `plot_pr`, as a public metric function on all three backends. It returns the
+  original curve and a pointwise quantile band across the replicas.
 - A `notebook` extra and a CI job that executes `examples/quickstart.ipynb`
   and compares its outputs with the committed ones.
 
@@ -60,7 +73,7 @@ First public alpha release.
 - Native confusion-table, precision-recall, average-precision, and operating-
   point helpers.
 - A constant-depth Spark bootstrap plan with a pandas fallback for Spark
-  3.3--4.0 and an Arrow iterator engine for Spark 4.1+.
+  3.5--4.0 and an Arrow iterator engine for Spark 4.1+.
 - Optional backend and plotting dependencies so the base package requires only
   NumPy.
 - Notebook conformance tests and an executed reference design.
