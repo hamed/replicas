@@ -33,17 +33,17 @@ def _unique_helper_column(df: DataFrame, stem: str) -> str:
     return name
 
 
-def confusion_table(df: DataFrame, group_by: Sequence[str]) -> DataFrame:
-    by_score = df.groupBy(*group_by, "prediction").agg(
+def confusion_table(df: DataFrame, by: Sequence[str]) -> DataFrame:
+    by_score = df.groupBy(*by, "prediction").agg(
         F.sum("positive").alias("dTP"),
         F.sum("negative").alias("dFP"),
         F.sum("unlabeled").alias("dUP"),
     )
-    totals = Window.partitionBy(*group_by).rowsBetween(
+    totals = Window.partitionBy(*by).rowsBetween(
         Window.unboundedPreceding, Window.unboundedFollowing
     )
     cumulative = (
-        Window.partitionBy(*group_by)
+        Window.partitionBy(*by)
         .orderBy(F.col("prediction").desc_nulls_last())
         .rowsBetween(Window.unboundedPreceding, Window.currentRow)
     )
@@ -58,15 +58,15 @@ def confusion_table(df: DataFrame, group_by: Sequence[str]) -> DataFrame:
             "UP": F.sum("dUP").over(cumulative),
         }
     ).select(
-        *group_by,
+        *by,
         F.col("prediction").alias("threshold"),
         *_CONFUSION_COLUMNS[1:],
     )
 
 
-def calculate_pr(df: DataFrame, group_by: Sequence[str]) -> DataFrame:
+def calculate_pr(df: DataFrame, by: Sequence[str]) -> DataFrame:
     cumulative = (
-        Window.partitionBy(*group_by)
+        Window.partitionBy(*by)
         .orderBy(F.col("threshold").desc_nulls_last())
         .rowsBetween(Window.unboundedPreceding, Window.currentRow)
     )
@@ -87,12 +87,12 @@ def calculate_pr(df: DataFrame, group_by: Sequence[str]) -> DataFrame:
 
 def at(
     df: DataFrame,
-    group_by: Sequence[str],
+    by: Sequence[str],
     metric: str,
     value: Any,
 ) -> DataFrame:
     helper = _unique_helper_column(df, "__replicas_at_row")
-    by_threshold = Window.partitionBy(*group_by).orderBy(F.col("threshold").asc_nulls_last())
+    by_threshold = Window.partitionBy(*by).orderBy(F.col("threshold").asc_nulls_last())
     return (
         df.filter(F.col(metric) >= value)
         .withColumn(helper, F.row_number().over(by_threshold))

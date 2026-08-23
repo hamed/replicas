@@ -24,28 +24,27 @@ _CONFUSION_COLUMNS = [
 ]
 
 
-def _sort(df: pl.DataFrame, group_by: Sequence[str], threshold: str, *, ascending: bool):
+def _sort(df: pl.DataFrame, by: Sequence[str], threshold: str, *, ascending: bool):
     return df.sort(
-        [*group_by, threshold],
-        descending=[False] * len(group_by) + [not ascending],
+        [*by, threshold],
+        descending=[False] * len(by) + [not ascending],
         nulls_last=True,
         maintain_order=True,
     )
 
 
-def confusion_table(df: pl.DataFrame, group_by: Sequence[str]) -> pl.DataFrame:
-    result = df.group_by([*group_by, "prediction"]).agg(
+def confusion_table(df: pl.DataFrame, by: Sequence[str]) -> pl.DataFrame:
+    result = df.group_by([*by, "prediction"]).agg(
         [pl.col(source).sum().alias(target) for source, target in _COUNTS.items()]
     )
-    result = _sort(result, group_by, "prediction", ascending=False)
+    result = _sort(result, by, "prediction", ascending=False)
 
-    if group_by:
+    if by:
         totals = [
-            pl.col(source).sum().over(list(group_by)).alias(target)
-            for source, target in _TOTALS.items()
+            pl.col(source).sum().over(list(by)).alias(target) for source, target in _TOTALS.items()
         ]
         cumulative = [
-            pl.col(source).cum_sum().over(list(group_by)).alias(target)
+            pl.col(source).cum_sum().over(list(by)).alias(target)
             for source, target in _CUMULATIVE.items()
         ]
     else:
@@ -57,19 +56,19 @@ def confusion_table(df: pl.DataFrame, group_by: Sequence[str]) -> pl.DataFrame:
     return (
         result.with_columns([*totals, *cumulative])
         .rename({"prediction": "threshold"})
-        .select([*group_by, *_CONFUSION_COLUMNS])
+        .select([*by, *_CONFUSION_COLUMNS])
     )
 
 
-def calculate_pr(df: pl.DataFrame, group_by: Sequence[str]) -> pl.DataFrame:
+def calculate_pr(df: pl.DataFrame, by: Sequence[str]) -> pl.DataFrame:
     original_columns = list(df.columns)
-    result = _sort(df.filter(pl.col("dTP") > 0), group_by, "threshold", ascending=False)
+    result = _sort(df.filter(pl.col("dTP") > 0), by, "threshold", ascending=False)
     result = result.with_columns(
         (pl.col("TP") / (pl.col("TP") + pl.col("FP"))).alias("precision"),
         (pl.col("TP") / pl.col("positives")).alias("recall"),
     )
     weighted = pl.col("dTP") * pl.col("precision")
-    numerator = weighted.cum_sum().over(list(group_by)) if group_by else weighted.cum_sum()
+    numerator = weighted.cum_sum().over(list(by)) if by else weighted.cum_sum()
     result = result.with_columns((numerator / pl.col("TP")).alias("average_precision"))
 
     metric_columns = ["precision", "recall", "average_precision"]
@@ -79,15 +78,15 @@ def calculate_pr(df: pl.DataFrame, group_by: Sequence[str]) -> pl.DataFrame:
 
 def at(
     df: pl.DataFrame,
-    group_by: Sequence[str],
+    by: Sequence[str],
     metric: str,
     value: Any,
 ) -> pl.DataFrame:
     columns = list(df.columns)
-    result = _sort(df.filter(pl.col(metric) >= value), group_by, "threshold", ascending=True)
-    if group_by:
-        result = result.unique(subset=list(group_by), keep="first", maintain_order=True)
-        result = result.sort(list(group_by), nulls_last=True, maintain_order=True)
+    result = _sort(df.filter(pl.col(metric) >= value), by, "threshold", ascending=True)
+    if by:
+        result = result.unique(subset=list(by), keep="first", maintain_order=True)
+        result = result.sort(list(by), nulls_last=True, maintain_order=True)
     else:
         result = result.head(1)
     return result.select(columns)

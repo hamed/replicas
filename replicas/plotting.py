@@ -155,24 +155,24 @@ def plot_pr(
     low = 0.5 - ci / 2
     high = 0.5 + ci / 2
 
-    group_by = [v for v in (hue, row, col) if v is not None] + ["recall"]
+    by = [v for v in (hue, row, col) if v is not None] + ["recall"]
 
     if recall_round is not None:
         df = df.withColumn("recall", F.round("recall", recall_round))
 
-    df = df.groupBy(*group_by, "replica").agg(F.max("precision").alias("precision"))
+    df = df.groupBy(*by, "replica").agg(F.max("precision").alias("precision"))
 
-    original = df.filter(F.col("replica") == -1).toPandas().set_index(group_by).sort_index()
+    original = df.filter(F.col("replica") == -1).toPandas().set_index(by).sort_index()
 
     bts = (
         df.filter(F.col("replica") >= 0)
-        .groupBy(group_by)
+        .groupBy(by)
         .agg(
             F.percentile_approx("precision", low).alias("low"),
             F.percentile_approx("precision", high).alias("high"),
         )
         .toPandas()
-        .set_index(group_by)
+        .set_index(by)
         .sort_index()
     )
 

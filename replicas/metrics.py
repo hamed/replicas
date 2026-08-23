@@ -34,7 +34,7 @@ from typing import Any, Optional, TypeVar, Union
 
 FrameT = TypeVar("FrameT")
 # Keep public annotations in pre-PEP 604 form for the Python 3.9 floor.
-GroupBy = Optional[Union[str, Sequence[str]]]  # noqa: UP007, UP045
+ByColumns = Optional[Union[str, Sequence[str]]]  # noqa: UP007, UP045
 
 _PREDICTION_COLUMNS = ("prediction", "positive", "negative", "unlabeled")
 _CONFUSION_COLUMNS = (
@@ -68,23 +68,23 @@ def _backend(df: Any):
     raise TypeError(f"Unsupported dataframe type {type(df)!r}; expected {supported}")
 
 
-def _groups(group_by: GroupBy) -> list[str]:
-    if group_by is None:
+def _groups(by: ByColumns) -> list[str]:
+    if by is None:
         return []
-    if isinstance(group_by, str):
-        return [group_by]
-    if isinstance(group_by, bytes):
-        raise TypeError("group_by must contain column names as strings, not bytes")
+    if isinstance(by, str):
+        return [by]
+    if isinstance(by, bytes):
+        raise TypeError("by must contain column names as strings, not bytes")
     try:
-        groups = list(group_by)
+        groups = list(by)
     except TypeError as error:
-        raise TypeError("group_by must be a column name or a sequence of column names") from error
+        raise TypeError("by must be a column name or a sequence of column names") from error
     if any(not isinstance(column, str) for column in groups):
-        raise TypeError("group_by entries must be column names")
+        raise TypeError("by entries must be column names")
 
     duplicates = [name for name, count in Counter(groups).items() if count > 1]
     if duplicates:
-        raise ValueError(f"group_by contains duplicate columns: {duplicates}")
+        raise ValueError(f"by contains duplicate columns: {duplicates}")
     return groups
 
 
@@ -99,11 +99,11 @@ def _validate_columns(df: Any, required: Sequence[str], groups: Sequence[str]) -
         raise ValueError(f"DataFrame is missing required columns: {missing}")
 
 
-def confusion_table(df: FrameT, group_by: GroupBy = None) -> FrameT:
+def confusion_table(df: FrameT, by: ByColumns = None) -> FrameT:
     """Build a per-threshold confusion table.
 
     Scores tied at the same threshold are collapsed before cumulative counts
-    are calculated.  The returned columns are ``group_by`` followed by
+    are calculated.  The returned columns are ``by`` followed by
     ``threshold``, cumulative ``TP``/``FP``/``UP``, per-score
     ``dTP``/``dFP``/``dUP``, and group totals
     ``positives``/``negatives``/``unlabeled``.
@@ -112,23 +112,23 @@ def confusion_table(df: FrameT, group_by: GroupBy = None) -> FrameT:
     threshold descending.  As usual for Spark DataFrames, Spark row order is
     unspecified unless the caller explicitly orders the result.
 
-    On Spark, omitting ``group_by`` leaves the cumulative and total windows
+    On Spark, omitting ``by`` leaves the cumulative and total windows
     without a partition key, so Spark moves every score to a single partition.
     Group by ``replica`` (the usual bootstrap case) to keep the work spread.
     """
     backend = _backend(df)
-    groups = _groups(group_by)
+    groups = _groups(by)
     _validate_columns(df, _PREDICTION_COLUMNS, groups)
 
     reserved = {*_PREDICTION_COLUMNS, *_CONFUSION_COLUMNS}
     conflicts = [column for column in groups if column in reserved]
     if conflicts:
-        raise ValueError(f"group_by columns conflict with confusion-table output: {conflicts}")
+        raise ValueError(f"by conflicts with a confusion-table output column: {conflicts}")
 
     return backend.confusion_table(df, groups)
 
 
-def calculate_pr(df: FrameT, group_by: GroupBy = None) -> FrameT:
+def calculate_pr(df: FrameT, by: ByColumns = None) -> FrameT:
     """Add precision, recall, and cumulative average precision.
 
     Thresholds with no new true positives are omitted.  ``average_precision``
@@ -136,24 +136,27 @@ def calculate_pr(df: FrameT, group_by: GroupBy = None) -> FrameT:
     row in each group equals the standard area under the precision-recall
     curve.
 
-    As in ``confusion_table``, omitting ``group_by`` on Spark leaves the
+    As in ``confusion_table``, omitting ``by`` on Spark leaves the
     cumulative window unpartitioned and collapses the data to one partition.
     """
     backend = _backend(df)
-    groups = _groups(group_by)
+    groups = _groups(by)
     _validate_columns(df, _CONFUSION_COLUMNS, groups)
     reserved = {*_CONFUSION_COLUMNS, *_PR_COLUMNS}
     conflicts = [column for column in groups if column in reserved]
     if conflicts:
-        raise ValueError(f"group_by columns conflict with confusion-table metrics: {conflicts}")
+        raise ValueError(f"by conflicts with a confusion-table or metric column: {conflicts}")
     return backend.calculate_pr(df, groups)
 
 
-def at(df: FrameT, group_by: GroupBy = None, **kwargs: Any) -> FrameT:
+def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
     """Return the lowest threshold satisfying one ``metric >= value`` target.
 
     A group with no qualifying threshold is absent from the result.  With
-    replicas in ``group_by``, the result is a distribution of operating points.
+    replicas in ``by``, the result is a distribution of operating points.
+
+    The metric arrives as a keyword argument, so ``by`` is reserved: a column
+    of that name cannot be used as a metric target here.
 
     Use this with a metric that does not *increase* as the threshold falls --
     ``precision`` is the intended one.  Lowering the threshold then trades
@@ -167,16 +170,16 @@ def at(df: FrameT, group_by: GroupBy = None, **kwargs: Any) -> FrameT:
     precision, whatever the target was.  To pick an operating point by recall,
     take the *highest* qualifying threshold instead.
 
-    On Spark, omitting ``group_by`` leaves the ranking window without a
+    On Spark, omitting ``by`` leaves the ranking window without a
     partition key and moves every row to a single partition.
     """
     if len(kwargs) != 1:
         raise ValueError(f"at() requires exactly one metric=value condition, got {len(kwargs)}")
 
     backend = _backend(df)
-    groups = _groups(group_by)
+    groups = _groups(by)
     metric, value = next(iter(kwargs.items()))
     _validate_columns(df, ("threshold", metric), groups)
     if "threshold" in groups:
-        raise ValueError("threshold cannot also be a group_by column")
+        raise ValueError("threshold cannot also appear in by")
     return backend.at(df, groups, metric, value)

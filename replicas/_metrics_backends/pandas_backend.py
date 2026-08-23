@@ -24,9 +24,9 @@ _CONFUSION_COLUMNS = [
 ]
 
 
-def _sort(df: pd.DataFrame, group_by: Sequence[str], threshold: str, *, ascending: bool):
-    columns = [*group_by, threshold]
-    directions = [True] * len(group_by) + [ascending]
+def _sort(df: pd.DataFrame, by: Sequence[str], threshold: str, *, ascending: bool):
+    columns = [*by, threshold]
+    directions = [True] * len(by) + [ascending]
     return df.sort_values(
         columns,
         ascending=directions,
@@ -35,23 +35,23 @@ def _sort(df: pd.DataFrame, group_by: Sequence[str], threshold: str, *, ascendin
     ).reset_index(drop=True)
 
 
-def _grouped(df: pd.DataFrame, group_by: Sequence[str]):
-    key = group_by[0] if len(group_by) == 1 else list(group_by)
+def _grouped(df: pd.DataFrame, by: Sequence[str]):
+    key = by[0] if len(by) == 1 else list(by)
     return df.groupby(key, dropna=False, observed=True, sort=False)
 
 
-def confusion_table(df: pd.DataFrame, group_by: Sequence[str]) -> pd.DataFrame:
-    score_keys = [*group_by, "prediction"]
+def confusion_table(df: pd.DataFrame, by: Sequence[str]) -> pd.DataFrame:
+    score_keys = [*by, "prediction"]
     result = (
         df.groupby(score_keys, dropna=False, observed=True, sort=False)[list(_COUNTS)]
         .sum()
         .rename(columns=_COUNTS)
         .reset_index()
     )
-    result = _sort(result, group_by, "prediction", ascending=False)
+    result = _sort(result, by, "prediction", ascending=False)
 
-    if group_by:
-        grouped = _grouped(result, group_by)
+    if by:
+        grouped = _grouped(result, by)
         totals = grouped[list(_TOTALS)].transform("sum").rename(columns=_TOTALS)
         cumulative = grouped[list(_CUMULATIVE)].cumsum().rename(columns=_CUMULATIVE)
     else:
@@ -67,21 +67,19 @@ def confusion_table(df: pd.DataFrame, group_by: Sequence[str]) -> pd.DataFrame:
         result[column] = cumulative[column]
 
     result = result.rename(columns={"prediction": "threshold"})
-    return result[[*group_by, *_CONFUSION_COLUMNS]]
+    return result[[*by, *_CONFUSION_COLUMNS]]
 
 
-def calculate_pr(df: pd.DataFrame, group_by: Sequence[str]) -> pd.DataFrame:
+def calculate_pr(df: pd.DataFrame, by: Sequence[str]) -> pd.DataFrame:
     original_columns = list(df.columns)
     result = df.loc[df["dTP"] > 0].copy()
-    result = _sort(result, group_by, "threshold", ascending=False)
+    result = _sort(result, by, "threshold", ascending=False)
     result["precision"] = result["TP"] / (result["TP"] + result["FP"])
     result["recall"] = result["TP"] / result["positives"]
     weighted_precision = result["dTP"] * result["precision"]
 
-    if group_by:
-        grouper = (
-            result[group_by[0]] if len(group_by) == 1 else [result[column] for column in group_by]
-        )
+    if by:
+        grouper = result[by[0]] if len(by) == 1 else [result[column] for column in by]
         numerator = weighted_precision.groupby(
             grouper,
             dropna=False,
@@ -99,18 +97,18 @@ def calculate_pr(df: pd.DataFrame, group_by: Sequence[str]) -> pd.DataFrame:
 
 def at(
     df: pd.DataFrame,
-    group_by: Sequence[str],
+    by: Sequence[str],
     metric: str,
     value: Any,
 ) -> pd.DataFrame:
     columns = list(df.columns)
     result = df.loc[df[metric] >= value].copy()
-    result = _sort(result, group_by, "threshold", ascending=True)
-    if group_by:
-        result = result.drop_duplicates(subset=list(group_by), keep="first")
-        result = result.sort_values(
-            list(group_by), kind="mergesort", na_position="last"
-        ).reset_index(drop=True)
+    result = _sort(result, by, "threshold", ascending=True)
+    if by:
+        result = result.drop_duplicates(subset=list(by), keep="first")
+        result = result.sort_values(list(by), kind="mergesort", na_position="last").reset_index(
+            drop=True
+        )
     else:
         result = result.head(1)
     return result[columns]
