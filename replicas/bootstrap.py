@@ -87,8 +87,15 @@ def bootstrap(
     pandas, Polars, or Spark DataFrames and always share the same native type.
 
     With equivalent native strata, a common unique ``order_by``, and a seed,
-    source-row multiplicities are identical across backends. Spark results are
-    eagerly checkpointed once; local backends do not accept ``checkpoint_dir``.
+    source-row multiplicities are identical across backends. NaN values in
+    ``by`` or ``order_by`` are outside that guarantee: pandas folds null and
+    NaN into one missing-value stratum while Polars and Spark keep them apart.
+    See "Backends and reproducibility" in the README.
+
+    Spark results are eagerly checkpointed once; local backends do not accept
+    ``checkpoint_dir``. Without ``by``, the whole Spark input is one stratum,
+    and an exact draw needs it materialized in a single Python worker. Pass
+    ``by`` on any input too large for one executor.
     """
     by_columns = normalize_columns(by, name="by")
     order_columns = normalize_columns(order_by, name="order_by")

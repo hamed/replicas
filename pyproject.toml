@@ -57,6 +57,14 @@ plot = [
     "matplotlib>=3.5",
     "seaborn>=0.12",
 ]
+# Executing examples/quickstart.ipynb in CI is a regression test on the public
+# API: the notebook calls it the way the README does, and a crash there is a
+# break a unit test can miss.
+notebook = [
+    "nbclient>=0.8",
+    "nbformat>=5",
+    "ipykernel>=6",
+]
 all = [
     "pandas>=1.3,<3",
     "polars>=1.0",

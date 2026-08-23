@@ -8,8 +8,11 @@ Arrow batches keep the plan shallow while yielding one replica at a time.
 
 from __future__ import annotations
 
+import getpass
 import math
+import os
 import re
+import tempfile
 from collections.abc import Iterator
 from typing import Any
 
@@ -24,7 +27,20 @@ from pyspark.sql import types as T
 from replicas._sampling import draw_indices, target_size
 
 _REPLICAS_PER_BATCH = 10
-_LOCAL_CHECKPOINT_DIR = "/tmp/replicas/"
+
+
+def _local_checkpoint_dir() -> str:
+    """A writable fallback checkpoint directory for a local Spark master.
+
+    The path carries the user name because the temporary directory is shared:
+    a fixed ``/tmp/replicas`` belongs to whoever created it first, and every
+    other user on the machine then fails to write into it.
+    """
+    try:
+        user = getpass.getuser()
+    except Exception:  # pragma: no cover - no password entry and no env vars
+        user = str(getattr(os, "getuid", lambda: "unknown")())
+    return os.path.join(tempfile.gettempdir(), f"replicas-{user}")
 
 
 def _version_pair(version: str) -> tuple[int, int]:
@@ -234,17 +250,56 @@ def _bootstrap_arrow(
     return expanded.groupBy(*grouping).applyInArrow(resample, schema=output_schema)
 
 
+_UUID_SUFFIX = re.compile(r"/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+
+def _checkpoint_root(directory: str) -> str:
+    """Undo the per-call UUID that ``setCheckpointDir`` appends to its argument.
+
+    ``getCheckpointDir`` reports ``<root>/<uuid>``. Feeding that back appends a
+    second UUID, so a naive save-and-restore makes the path one level deeper on
+    every bootstrap. Restoring the root keeps it stable instead; the UUID was
+    ephemeral either way, and checkpoints already written keep their own files.
+    """
+    return _UUID_SUFFIX.sub("", directory)
+
+
+def _restore_checkpoint_dir(spark_context: Any, previous: str | None) -> None:
+    """Put back the checkpoint directory the caller had configured.
+
+    Already-checkpointed RDDs keep the files they wrote, so restoring after an
+    eager checkpoint is safe. ``setCheckpointDir(None)`` clears the setting on
+    the Spark versions this package supports, but that is not part of the
+    public contract, so a failure to clear must not fail the caller's
+    bootstrap.
+    """
+    target = None if previous is None else _checkpoint_root(previous)
+    try:
+        spark_context.setCheckpointDir(target)
+    except Exception:  # pragma: no cover - depends on the Spark build
+        pass
+
+
 def _checkpoint(df: DataFrame, checkpoint_dir: str | None) -> DataFrame:
     spark_context = df.sparkSession.sparkContext
+    previous = spark_context.getCheckpointDir()
     if checkpoint_dir is not None:
         spark_context.setCheckpointDir(checkpoint_dir)
-    elif spark_context.getCheckpointDir() is None:
+    elif previous is None:
         if not spark_context.master.startswith("local"):
             raise ValueError(
                 "Spark has no checkpoint directory; configure one or pass checkpoint_dir"
             )
-        spark_context.setCheckpointDir(_LOCAL_CHECKPOINT_DIR)
-    return df.checkpoint(eager=True)
+        spark_context.setCheckpointDir(_local_checkpoint_dir())
+    else:
+        return df.checkpoint(eager=True)
+
+    try:
+        return df.checkpoint(eager=True)
+    finally:
+        # The directory is session-wide state. Leaving ours in place would
+        # silently redirect every later checkpoint() the caller makes.
+        _restore_checkpoint_dir(spark_context, previous)
 
 
 def sample(

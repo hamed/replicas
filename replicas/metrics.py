@@ -16,6 +16,13 @@ Data schema
 
 The three indicator columns are mutually exclusive.  Null values in grouping
 columns are supported and form an ordinary group.
+
+These two conditions are the caller's responsibility; they are not checked.
+Validating them costs a full pass over the data, which on Spark means an
+eager job before the lazy plan the caller asked for.  A null in an indicator
+column is skipped by every backend's ``sum``, and a row that sets two
+indicators is counted twice -- in both cases the counts are silently wrong.
+Clean the input before calling ``confusion_table``.
 """
 
 from __future__ import annotations
@@ -104,6 +111,10 @@ def confusion_table(df: FrameT, group_by: GroupBy = None) -> FrameT:
     pandas and Polars results are sorted by grouping columns ascending and
     threshold descending.  As usual for Spark DataFrames, Spark row order is
     unspecified unless the caller explicitly orders the result.
+
+    On Spark, omitting ``group_by`` leaves the cumulative and total windows
+    without a partition key, so Spark moves every score to a single partition.
+    Group by ``replica`` (the usual bootstrap case) to keep the work spread.
     """
     backend = _backend(df)
     groups = _groups(group_by)
@@ -124,6 +135,9 @@ def calculate_pr(df: FrameT, group_by: GroupBy = None) -> FrameT:
     is a running, true-positive-weighted mean; only its last (lowest-threshold)
     row in each group equals the standard area under the precision-recall
     curve.
+
+    As in ``confusion_table``, omitting ``group_by`` on Spark leaves the
+    cumulative window unpartitioned and collapses the data to one partition.
     """
     backend = _backend(df)
     groups = _groups(group_by)
@@ -140,6 +154,21 @@ def at(df: FrameT, group_by: GroupBy = None, **kwargs: Any) -> FrameT:
 
     A group with no qualifying threshold is absent from the result.  With
     replicas in ``group_by``, the result is a distribution of operating points.
+
+    Use this with a metric that does not *increase* as the threshold falls --
+    ``precision`` is the intended one.  Lowering the threshold then trades
+    that metric for recall, and the lowest qualifying threshold is the most
+    recall the target allows.
+
+    ``recall`` is the opposite: it does not *decrease* as the threshold falls,
+    so every threshold below some point clears the target and the lowest of
+    them is simply the group's minimum threshold.  ``at(kpi, recall=0.5)``
+    therefore returns the last row of each group, at recall ~1.0 and the worst
+    precision, whatever the target was.  To pick an operating point by recall,
+    take the *highest* qualifying threshold instead.
+
+    On Spark, omitting ``group_by`` leaves the ranking window without a
+    partition key and moves every row to a single partition.
     """
     if len(kwargs) != 1:
         raise ValueError(f"at() requires exactly one metric=value condition, got {len(kwargs)}")

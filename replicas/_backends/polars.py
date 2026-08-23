@@ -79,7 +79,9 @@ def bootstrap(
     if checkpoint_dir is not None:
         raise ValueError("checkpoint_dir is only supported for Spark DataFrames")
 
-    pieces = [df.with_columns(pl.lit(-1, dtype=pl.Int64).alias("replica"))]
+    # int32 matches the Spark and pandas backends; the column is a replica
+    # index, so a wider type only makes the three schemas disagree.
+    pieces = [df.with_columns(pl.lit(-1, dtype=pl.Int32).alias("replica"))]
     for replica in range(n_replicas):
         sampled = _sample_replica(
             df,
@@ -88,6 +90,6 @@ def bootstrap(
             run_seed=run_seed,
             order_by=order_by,
             replica=replica,
-        ).with_columns(pl.lit(replica, dtype=pl.Int64).alias("replica"))
+        ).with_columns(pl.lit(replica, dtype=pl.Int32).alias("replica"))
         pieces.append(sampled)
     return pl.concat(pieces, how="vertical", rechunk=True)

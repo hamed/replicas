@@ -105,11 +105,12 @@ generalizing its execution model.
 | null grouping keys in metrics | totals join can drop them | native transform/window totals preserve them |
 | empty `group_by` | some joins/windows fail | explicit ungrouped branches |
 | `at` with 0 or 2+ conditions | silently uses the first | raises `ValueError` |
-| checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses the local `/tmp/replicas/` fallback |
+| checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses a per-user `replicas-<user>` fallback under the system temporary directory; the caller's setting is restored afterwards |
 
 The Spark implementation uses the session attached to the input DataFrame and
-checkpoints eagerly once. Local backends are already eager and do not accept a
-checkpoint directory. The package documentation also corrects one prose error
+checkpoints eagerly once. The checkpoint directory is session-wide state, so
+`bootstrap` puts the caller's setting back when it is done. Local backends are
+already eager and do not accept a checkpoint directory. The package documentation also corrects one prose error
 from the original port: complete average precision is found at the
 last/lowest retained threshold, not the first/highest one.
 

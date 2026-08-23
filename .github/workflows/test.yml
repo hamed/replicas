@@ -106,6 +106,47 @@ jobs:
           JAVA_TOOL_OPTIONS: -Dio.netty.tryReflectionSetAccessible=true
         run: uv run --no-project pytest -q
 
+  # examples/quickstart.ipynb drives the public API end to end: pandas
+  # bootstrap, Spark bootstrap, all three metric functions, and both plot
+  # helpers. Executing it catches breakage the unit tests miss, because it
+  # calls the package the way the README tells a user to.
+  #
+  # examples/precision_recall.ipynb is deliberately not here. It is the
+  # reference design: it defines its own copies of the functions and needs
+  # kagglehub, scikit-learn, and CatBoost.
+  notebook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-suffix: notebook
+
+      - name: Install from a clean environment
+        run: |
+          uv venv --python 3.13
+          uv pip install -e '.[dev,plot,notebook]'
+
+      # The script fails on a cell that raises and on a cell whose output
+      # drifted from the committed one. It executes a copy in memory, so the
+      # committed outputs -- part of the artifact -- stay untouched.
+      - name: Execute the quickstart notebook and compare its outputs
+        run: uv run --no-project python scripts/check_example_notebook.py examples/quickstart.ipynb
+
+      - name: Confirm the notebook is unchanged in the working tree
+        run: git diff --exit-code -- examples/
+
   package:
     runs-on: ubuntu-latest
     steps:

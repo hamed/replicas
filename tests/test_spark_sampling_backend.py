@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 import pytest
@@ -262,3 +263,56 @@ def test_logical_plan_shape_is_constant_as_replicas_grow(stratified_rows, implem
         return result._jdf.queryExecution().logical().treeString().splitlines()
 
     assert len(plan_lines(1)) == len(plan_lines(100))
+
+
+def test_checkpoint_dir_is_restored_when_the_caller_had_none(stratified_rows, tmp_path):
+    # The directory is session-wide. Left in place, it silently redirects every
+    # later checkpoint() the caller makes.
+    context = stratified_rows.sparkSession.sparkContext
+    before = context.getCheckpointDir()
+
+    spark_backend.bootstrap(
+        stratified_rows,
+        by=("stratum",),
+        n_replicas=1,
+        checkpoint_dir=str(tmp_path / "restore-none"),
+        run_seed=11,
+        order_by=("row_id",),
+    )
+
+    assert context.getCheckpointDir() == before
+
+
+def test_restoring_the_caller_directory_does_not_nest_on_every_call(stratified_rows, tmp_path):
+    # setCheckpointDir appends a UUID, so feeding getCheckpointDir back would
+    # deepen the path once per bootstrap. The root has to stay put instead.
+    context = stratified_rows.sparkSession.sparkContext
+    caller_root = str(tmp_path / "caller")
+    context.setCheckpointDir(caller_root)
+    depth = context.getCheckpointDir().count("/")
+
+    try:
+        for index in range(3):
+            spark_backend.bootstrap(
+                stratified_rows,
+                by=("stratum",),
+                n_replicas=1,
+                checkpoint_dir=str(tmp_path / f"ours-{index}"),
+                run_seed=12,
+                order_by=("row_id",),
+            )
+            current = context.getCheckpointDir()
+            assert current.startswith(f"file:{caller_root}/")
+            assert current.count("/") == depth
+    finally:
+        context.setCheckpointDir(None)
+
+
+def test_local_checkpoint_fallback_is_scoped_to_the_user():
+    # A fixed /tmp/replicas belongs to whoever created it first; every other
+    # user on the machine then fails to write into it.
+    fallback = spark_backend._local_checkpoint_dir()
+
+    assert fallback != "/tmp/replicas/"
+    assert os.path.basename(fallback).startswith("replicas-")
+    assert os.path.basename(fallback) != "replicas-"

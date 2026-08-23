@@ -119,9 +119,11 @@ bootstrap(
 `by` and `order_by` accept one column name or a sequence. `sample` draws
 `round(group_size * fraction)` rows with replacement from every stratum.
 `bootstrap` accepts zero replicas, rejects negative counts, and appends
-`replica` after the input columns. Both functions reject an existing reserved
-`replica` column.
-`checkpoint_dir` applies only to Spark; local backends are already eager.
+`replica` after the input columns as a 32-bit integer on every backend. Both
+functions reject an existing reserved `replica` column.
+`checkpoint_dir` applies only to Spark; local backends are already eager. It
+is session-wide Spark state, so `bootstrap` restores whatever the caller had
+configured once the checkpoint is written.
 
 ## Backends and reproducibility
 
