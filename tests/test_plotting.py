@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import matplotlib
 import pandas as pd
+import pytest
 
 matplotlib.use("Agg")
 
@@ -84,3 +85,24 @@ def test_plot_pr_supports_single_and_faceted_views(spark):
         "recent | returning",
     }
     plt.close(faceted.figure)
+
+
+def test_box_plot_requires_a_replica_column():
+    # Every box is a distribution across replicas, so the column is part of
+    # the contract. Without this check pandas raises a melt KeyError that does
+    # not say which column is missing or why it is needed.
+    frame = pd.DataFrame({"threshold": [0.4, 0.5], "precision": [0.9, 0.8]})
+
+    with pytest.raises(ValueError, match="requires a 'replica' column"):
+        box_plot(frame, values=("threshold",))
+
+
+@pytest.mark.parametrize("ci", [0.0, -0.1, 1.5, 2.0])
+def test_plot_pr_rejects_a_ci_outside_the_unit_interval(spark, ci):
+    # ci > 1 asks percentile_approx for a negative percentage. Caught here,
+    # the caller sees the offending value instead of a Spark analysis error.
+    columns = ["model", "period", "segment", "replica", "recall", "precision"]
+    curves = spark.createDataFrame(_spark_curve_rows(), columns)
+
+    with pytest.raises(ValueError, match="ci must be in the interval"):
+        plot_pr(curves, ci=ci)

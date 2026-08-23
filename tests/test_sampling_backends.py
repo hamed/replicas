@@ -302,3 +302,28 @@ def test_public_seeded_spark_requires_order_by(spark):
     frame = spark.createDataFrame([(0,), (1,)], "row_id long")
     with pytest.raises(ValueError, match="requires order_by"):
         bootstrap(frame, n_replicas=1, seed=7)
+
+
+def test_replica_column_is_int32_on_every_backend(pandas_frame, spark, tmp_path):
+    # The three backends disagreed here: int64, Int64, and IntegerType. A
+    # replica index needs 32 bits, so the narrow type is the one to share.
+    pl = pytest.importorskip("polars")
+    from pyspark.sql import types as T
+
+    pandas_result = bootstrap(pandas_frame, by="stratum", n_replicas=2, seed=3, order_by="row_id")
+    assert pandas_result["replica"].dtype == np.dtype("int32")
+
+    polars_result = bootstrap(
+        pl.from_pandas(pandas_frame), by="stratum", n_replicas=2, seed=3, order_by="row_id"
+    )
+    assert polars_result.schema["replica"] == pl.Int32
+
+    spark_result = bootstrap(
+        spark.createDataFrame(pandas_frame),
+        by="stratum",
+        n_replicas=2,
+        checkpoint_dir=str(tmp_path / "replica-dtype"),
+        seed=3,
+        order_by="row_id",
+    )
+    assert spark_result.schema["replica"].dataType == T.IntegerType()

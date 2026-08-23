@@ -67,7 +67,8 @@ def box_plot(
     Parameters
     ----------
     df : pandas.DataFrame
-        Usually the result of `at(...).toPandas()`.
+        Usually the result of `at(...).toPandas()`. A `replica` column is
+        required: each box is the distribution of one metric across replicas.
     row, col, hue : str, optional
         Faceting / coloring columns passed through to seaborn.
     kind : str
@@ -78,6 +79,13 @@ def box_plot(
         Forwarded to `sns.catplot`.
     """
     _, sns = _plot_dependencies()
+
+    if "replica" not in df.columns:
+        raise ValueError(
+            "box_plot requires a 'replica' column: every box is a distribution "
+            "across bootstrap replicas. Pass the output of at() or calculate_pr() "
+            "grouped by 'replica'."
+        )
 
     values = list(values)
     id_vars = [v for v in (hue, row, col) if v is not None] + ["replica"]
@@ -126,7 +134,9 @@ def plot_pr(
     row, col, hue : str, optional
         Faceting / coloring columns.
     ci : float
-        Width of the confidence band (e.g. 0.9 for 5th-95th percentile).
+        Width of the confidence band (e.g. 0.9 for 5th-95th percentile). Must
+        lie in `(0, 1]`; a wider value would ask Spark for a percentile
+        outside `[0, 1]`.
     recall_round : int, optional
         If set, round recall to this many decimals before aggregating across
         replicas. Useful on small datasets where the raw curve is noisy.
@@ -136,6 +146,11 @@ def plot_pr(
     """
     plt, sns = _plot_dependencies()
     F = _spark_functions()
+
+    # Checked here rather than in Spark: an out-of-range ci only fails once
+    # percentile_approx runs, deep inside the plan and far from the caller.
+    if not 0 < ci <= 1:
+        raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")
 
     low = 0.5 - ci / 2
     high = 0.5 + ci / 2

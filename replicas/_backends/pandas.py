@@ -86,8 +86,10 @@ def bootstrap(
     if checkpoint_dir is not None:
         raise ValueError("checkpoint_dir is only supported for Spark DataFrames")
 
+    # int32 matches the Spark and Polars backends; the column is a replica
+    # index, so a wider type only makes the three schemas disagree.
     original = df.copy()
-    original["replica"] = -1
+    original["replica"] = pd.Series(-1, index=original.index, dtype="int32")
     pieces = [original]
     for replica in range(n_replicas):
         sampled = _sample_replica(
@@ -98,6 +100,6 @@ def bootstrap(
             order_by=order_by,
             replica=replica,
         ).copy()
-        sampled["replica"] = replica
+        sampled["replica"] = pd.Series(replica, index=sampled.index, dtype="int32")
         pieces.append(sampled)
     return pd.concat(pieces, axis=0)
