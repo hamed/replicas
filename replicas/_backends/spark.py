@@ -13,6 +13,8 @@ import math
 import os
 import re
 import tempfile
+import threading
+import warnings
 from collections.abc import Iterator
 from typing import Any
 
@@ -250,18 +252,22 @@ def _bootstrap_arrow(
     return expanded.groupBy(*grouping).applyInArrow(resample, schema=output_schema)
 
 
-_UUID_SUFFIX = re.compile(r"/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+_CHECKPOINT_LOCK = threading.Lock()
+
+# ``setCheckpointDir`` appends a UUID to whatever it receives, and
+# ``getCheckpointDir`` reports the combined ``<root>/<uuid>``. Restoring that
+# reported value therefore nests one directory deeper on every call. Rather
+# than parse Spark's generated path back apart, remember the root that
+# produced the reported value. Written and read only under _CHECKPOINT_LOCK.
+_REPORTED_ROOT: tuple[str, str] | None = None
 
 
-def _checkpoint_root(directory: str) -> str:
-    """Undo the per-call UUID that ``setCheckpointDir`` appends to its argument.
-
-    ``getCheckpointDir`` reports ``<root>/<uuid>``. Feeding that back appends a
-    second UUID, so a naive save-and-restore makes the path one level deeper on
-    every bootstrap. Restoring the root keeps it stable instead; the UUID was
-    ephemeral either way, and checkpoints already written keep their own files.
-    """
-    return _UUID_SUFFIX.sub("", directory)
+def _restore_target(reported: str) -> str:
+    """The root to set so the caller's checkpoint path stops at its old depth."""
+    remembered = _REPORTED_ROOT
+    if remembered is not None and remembered[0] == reported:
+        return remembered[1]
+    return reported
 
 
 def _restore_checkpoint_dir(spark_context: Any, previous: str | None) -> None:
@@ -269,37 +275,62 @@ def _restore_checkpoint_dir(spark_context: Any, previous: str | None) -> None:
 
     Already-checkpointed RDDs keep the files they wrote, so restoring after an
     eager checkpoint is safe. ``setCheckpointDir(None)`` clears the setting on
-    the Spark versions this package supports, but that is not part of the
-    public contract, so a failure to clear must not fail the caller's
-    bootstrap.
+    every Spark version this package supports, but that is not part of the
+    public contract, and neither is the Py4J error a failure would raise. The
+    bootstrap itself has already succeeded by this point, so a failed restore
+    warns instead of discarding a completed job -- but it must never pass
+    silently, because it leaves session-wide state behind.
     """
-    target = None if previous is None else _checkpoint_root(previous)
+    global _REPORTED_ROOT
+
+    target = None if previous is None else _restore_target(previous)
     try:
         spark_context.setCheckpointDir(target)
-    except Exception:  # pragma: no cover - depends on the Spark build
-        pass
+    except Exception as error:  # noqa: BLE001 - Py4J raises outside one hierarchy
+        warnings.warn(
+            "replicas could not restore the Spark checkpoint directory to "
+            f"{target!r}: {error!r}. The session still points at the directory "
+            "this bootstrap used; set it yourself before the next checkpoint().",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return
+
+    if target is None:
+        _REPORTED_ROOT = None
+        return
+    reported = spark_context.getCheckpointDir()
+    _REPORTED_ROOT = None if reported is None else (reported, target)
 
 
 def _checkpoint(df: DataFrame, checkpoint_dir: str | None) -> DataFrame:
     spark_context = df.sparkSession.sparkContext
-    previous = spark_context.getCheckpointDir()
-    if checkpoint_dir is not None:
-        spark_context.setCheckpointDir(checkpoint_dir)
-    elif previous is None:
+
+    if checkpoint_dir is None:
+        if spark_context.getCheckpointDir() is not None:
+            # The caller configured a directory and asked for no other one.
+            # Nothing to change, so nothing to restore.
+            return df.checkpoint(eager=True)
         if not spark_context.master.startswith("local"):
             raise ValueError(
                 "Spark has no checkpoint directory; configure one or pass checkpoint_dir"
             )
-        spark_context.setCheckpointDir(_local_checkpoint_dir())
-    else:
-        return df.checkpoint(eager=True)
+        checkpoint_dir = _local_checkpoint_dir()
 
-    try:
-        return df.checkpoint(eager=True)
-    finally:
-        # The directory is session-wide state. Leaving ours in place would
-        # silently redirect every later checkpoint() the caller makes.
-        _restore_checkpoint_dir(spark_context, previous)
+    # The checkpoint directory is session-wide and Spark offers no per-call
+    # override, so writing to a chosen directory means mutating shared state.
+    # The lock makes the read/set/checkpoint/restore sequence atomic against
+    # other bootstrap() calls in this driver: without it, two concurrent calls
+    # can checkpoint into each other's directory or restore the wrong value.
+    # A SparkContext is a per-process singleton, so a process-wide lock covers
+    # every caller that can reach this state.
+    with _CHECKPOINT_LOCK:
+        previous = spark_context.getCheckpointDir()
+        spark_context.setCheckpointDir(checkpoint_dir)
+        try:
+            return df.checkpoint(eager=True)
+        finally:
+            _restore_checkpoint_dir(spark_context, previous)
 
 
 def sample(

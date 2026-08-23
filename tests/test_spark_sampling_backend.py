@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
+import uuid
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 from pyspark.sql import functions as F
@@ -285,11 +289,12 @@ def test_checkpoint_dir_is_restored_when_the_caller_had_none(stratified_rows, tm
 
 def test_restoring_the_caller_directory_does_not_nest_on_every_call(stratified_rows, tmp_path):
     # setCheckpointDir appends a UUID, so feeding getCheckpointDir back would
-    # deepen the path once per bootstrap. The root has to stay put instead.
+    # deepen the path once per bootstrap. The first restore of a directory this
+    # package never set costs one level; after that the depth has to hold.
     context = stratified_rows.sparkSession.sparkContext
     caller_root = str(tmp_path / "caller")
     context.setCheckpointDir(caller_root)
-    depth = context.getCheckpointDir().count("/")
+    depth = context.getCheckpointDir().count("/") + 1
 
     try:
         for index in range(3):
@@ -316,3 +321,122 @@ def test_local_checkpoint_fallback_is_scoped_to_the_user():
     assert fallback != "/tmp/replicas/"
     assert os.path.basename(fallback).startswith("replicas-")
     assert os.path.basename(fallback) != "replicas-"
+
+
+class _FakeSparkContext:
+    """Enough of SparkContext to exercise the checkpoint-state handling.
+
+    The UUID suffix matters: the real ``setCheckpointDir`` appends one, which
+    is why a naive save-and-restore would deepen the path on every call.
+    """
+
+    def __init__(self, master="local[1]", fail_when_clearing=False):
+        self.master = master
+        self.fail_when_clearing = fail_when_clearing
+        self._directory = None
+        self.events = []
+
+    def getCheckpointDir(self):
+        return self._directory
+
+    def setCheckpointDir(self, directory):
+        if directory is None:
+            if self.fail_when_clearing:
+                raise RuntimeError("py4j: cannot clear the checkpoint directory")
+            self._directory = None
+        else:
+            resolved = directory if directory.startswith("file:") else f"file:{directory}"
+            self._directory = f"{resolved}/{uuid.uuid4()}"
+        self.events.append((threading.current_thread().name, "set", self._directory))
+
+
+class _FakeDataFrame:
+    def __init__(self, context, delay=0.0):
+        self.sparkSession = SimpleNamespace(sparkContext=context)
+        self._context = context
+        self._delay = delay
+
+    def checkpoint(self, eager=True):
+        self._context.events.append(
+            (threading.current_thread().name, "checkpoint", self._context.getCheckpointDir())
+        )
+        time.sleep(self._delay)
+        return self
+
+
+@pytest.fixture(autouse=True)
+def _forget_remembered_root(monkeypatch):
+    monkeypatch.setattr(spark_backend, "_REPORTED_ROOT", None)
+
+
+def test_concurrent_checkpoints_do_not_interleave():
+    # setCheckpointDir is session-wide and Spark has no per-call override, so
+    # two bootstraps racing on it can checkpoint into each other's directory.
+    # The lock has to make read/set/checkpoint/restore atomic.
+    context = _FakeSparkContext()
+    threads = [
+        threading.Thread(
+            target=lambda name=name: spark_backend._checkpoint(
+                _FakeDataFrame(context, delay=0.05), f"/tmp/{name}"
+            ),
+            name=name,
+        )
+        for name in ("worker-a", "worker-b")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    owners = [owner for owner, _, _ in context.events]
+    assert owners in (["worker-a"] * 3 + ["worker-b"] * 3, ["worker-b"] * 3 + ["worker-a"] * 3)
+
+    for owner, phase, directory in context.events:
+        if phase == "checkpoint":
+            assert f"/tmp/{owner}/" in directory
+
+    assert context.getCheckpointDir() is None
+
+
+def test_repeated_checkpoints_keep_the_caller_directory_at_one_depth():
+    # A directory this package never set has no known root, so the first
+    # restore costs one extra level. Every call after it reuses the remembered
+    # root, so the depth stops there instead of growing without bound.
+    context = _FakeSparkContext()
+    context.setCheckpointDir("/tmp/caller")
+    original_depth = context.getCheckpointDir().count("/")
+
+    depths = []
+    for index in range(50):
+        spark_backend._checkpoint(_FakeDataFrame(context), f"/tmp/ours-{index}")
+        current = context.getCheckpointDir()
+        assert current.startswith("file:/tmp/caller/")
+        depths.append(current.count("/"))
+
+    assert set(depths) == {original_depth + 1}
+
+
+def test_a_failed_restore_warns_instead_of_passing_silently():
+    # The bootstrap itself has already succeeded, so a failed restore must not
+    # discard the job -- but it leaves session-wide state behind, so it must
+    # not pass unnoticed either.
+    context = _FakeSparkContext(fail_when_clearing=True)
+    frame = _FakeDataFrame(context)
+
+    with pytest.warns(RuntimeWarning, match="could not restore the Spark checkpoint directory"):
+        result = spark_backend._checkpoint(frame, "/tmp/ours")
+
+    assert result is frame
+    assert context.getCheckpointDir().startswith("file:/tmp/ours/")
+
+
+def test_an_existing_caller_directory_is_used_without_touching_it():
+    context = _FakeSparkContext()
+    context.setCheckpointDir("/tmp/caller")
+    before = context.getCheckpointDir()
+    context.events.clear()
+
+    spark_backend._checkpoint(_FakeDataFrame(context), None)
+
+    assert [phase for _, phase, _ in context.events] == ["checkpoint"]
+    assert context.getCheckpointDir() == before

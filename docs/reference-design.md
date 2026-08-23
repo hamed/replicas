@@ -108,8 +108,10 @@ generalizing its execution model.
 | checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses a per-user `replicas-<user>` fallback under the system temporary directory; the caller's setting is restored afterwards |
 
 The Spark implementation uses the session attached to the input DataFrame and
-checkpoints eagerly once. The checkpoint directory is session-wide state, so
-`bootstrap` puts the caller's setting back when it is done. Local backends are
+checkpoints eagerly once. The checkpoint directory is session-wide state and
+Spark has no per-call override, so `bootstrap` sets it, checkpoints, and puts
+the caller's setting back, all under a process-wide lock. Without the lock two
+concurrent calls can checkpoint into each other's directory. Local backends are
 already eager and do not accept a checkpoint directory. The package documentation also corrects one prose error
 from the original port: complete average precision is found at the
 last/lowest retained threshold, not the first/highest one.

@@ -123,7 +123,8 @@ bootstrap(
 functions reject an existing reserved `replica` column.
 `checkpoint_dir` applies only to Spark; local backends are already eager. It
 is session-wide Spark state, so `bootstrap` restores whatever the caller had
-configured once the checkpoint is written.
+configured once the checkpoint is written, and serializes that sequence
+against concurrent `bootstrap` calls in the same driver.
 
 ## Backends and reproducibility
 
