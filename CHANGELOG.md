@@ -25,6 +25,12 @@ All notable changes to `replicas` are documented here.
 
 ### Changed
 
+- **Breaking.** `confusion_table`, `calculate_pr`, and `at` take `by` instead
+  of `group_by`. Every public function that partitions a computation by
+  columns now uses the same name, matching `sample` and `bootstrap` and
+  pandas' own `groupby(by=...)`. Positional calls are unaffected; a
+  `group_by=` keyword call raises `TypeError`. The type alias
+  `replicas.metrics.GroupBy` is now `ByColumns`.
 - The `replica` column is a 32-bit integer on all three backends. pandas
   previously produced `int64` and Polars `Int64`.
 - `at` documents that its "lowest qualifying threshold" rule suits a metric
@@ -33,7 +39,7 @@ All notable changes to `replicas` are documented here.
 - `confusion_table` documents that the non-null and mutually-exclusive
   conditions on its indicator columns are the caller's responsibility.
 - The metric functions and `bootstrap` document the Spark cost of an empty
-  `group_by` and of an empty `by`.
+  `by`.
 - `bootstrap` points at the README for the NaN exception to the cross-backend
   parity guarantee.
 

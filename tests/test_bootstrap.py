@@ -97,8 +97,8 @@ def test_recall_never_exceeds_one(toy_predictions):
     removed from bootstrap(), this test would fail.
     """
     bts = bootstrap(toy_predictions, by=["name", "positive"], n_replicas=30)
-    ct = confusion_table(bts, group_by=["name", "replica"])
-    kpi = calculate_pr(ct, group_by=["name", "replica"])
+    ct = confusion_table(bts, by=["name", "replica"])
+    kpi = calculate_pr(ct, by=["name", "replica"])
 
     rows = kpi.select(F.max("recall").alias("max_r"), F.min("recall").alias("min_r")).collect()[0]
     assert rows["max_r"] <= 1.0 + 1e-9

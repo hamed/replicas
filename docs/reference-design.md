@@ -87,8 +87,8 @@ inflates precision, which is the failure this schema exists to prevent.
 PR curve only at the last row of each group. Intentional — it makes the column
 readable at any threshold.
 
-**`groupBy(group_by)` next to `groupBy(*group_by, ...)`** in the same function
-(`replicas/plotting.py:117` and `:123`). Inconsistent style, identical
+**`groupBy(by)` next to `groupBy(*by, ...)`** in the same function
+(`replicas/plotting.py`, in `plot_pr`). Inconsistent style, identical
 semantics. Not worth a diff.
 
 ## Where the library intentionally differs
@@ -103,7 +103,7 @@ generalizing its execution model.
 | deterministic Spark order | not defined | a supplied seed requires a unique `order_by` within every stratum |
 | bootstrap plan | one union and grouped pandas UDF per replica | one constant-depth grouped UDF plan; Arrow batches stream record batches on Spark 4.1+ |
 | null grouping keys in metrics | totals join can drop them | native transform/window totals preserve them |
-| empty `group_by` | some joins/windows fail | explicit ungrouped branches |
+| empty `by` | some joins/windows fail | explicit ungrouped branches |
 | `at` with 0 or 2+ conditions | silently uses the first | raises `ValueError` |
 | checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses a per-user `replicas-<user>` fallback under the system temporary directory; the caller's setting is restored afterwards |
 

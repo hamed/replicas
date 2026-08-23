@@ -71,11 +71,11 @@ precision-recall helpers preserve that native dataframe type too:
 ```python
 from replicas import at, calculate_pr, confusion_table
 
-ct = confusion_table(bts, group_by=["name", "replica"])
-kpi = calculate_pr(ct, group_by=["name", "replica"])
+ct = confusion_table(bts, by=["name", "replica"])
+kpi = calculate_pr(ct, by=["name", "replica"])
 
 # Operating point: smallest threshold meeting target precision, per replica.
-op = at(kpi, group_by=["name", "replica"], precision=0.95)
+op = at(kpi, by=["name", "replica"], precision=0.95)
 ```
 
 `op` is a distribution of thresholds, not a single number. Summarize it with
