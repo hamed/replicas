@@ -28,7 +28,7 @@ _LOCAL_CHECKPOINT_DIR = "/tmp/replicas/"
 
 
 def _version_pair(version: str) -> tuple[int, int]:
-    """Return Spark's major/minor pair, including for vendor/dev versions."""
+    """Return a major/minor pair, including for vendor and development versions."""
     match = re.match(r"^(\d+)\.(\d+)", version)
     if match is None:
         return (0, 0)
@@ -82,11 +82,12 @@ def _sort_pandas(pdf: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
 def _sort_arrow(table: pa.Table, columns: tuple[str, ...]) -> pa.Table:
     if not columns:
         return table
-    indices = pc.sort_indices(
-        table,
-        sort_keys=[(column, "ascending") for column in columns],
-        null_placement="at_start",
-    )
+    if _version_pair(pa.__version__) >= (25, 0):
+        sort_keys = [(column, "ascending", "at_start") for column in columns]
+        indices = pc.sort_indices(table, sort_keys=sort_keys)
+    else:
+        sort_keys = [(column, "ascending") for column in columns]
+        indices = pc.sort_indices(table, sort_keys=sort_keys, null_placement="at_start")
     return table.take(indices)
 
 

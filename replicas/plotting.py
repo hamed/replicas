@@ -43,6 +43,16 @@ def _spark_functions():
     return F
 
 
+def _facet_title(row, col, separator: str) -> str | None:
+    if row is not None and col is not None:
+        return f"{{row_name}} {separator} {{col_name}}"
+    if row is not None:
+        return "{row_name}"
+    if col is not None:
+        return "{col_name}"
+    return None
+
+
 def box_plot(
     df,
     row=None,
@@ -86,11 +96,11 @@ def box_plot(
         row=row,
         col=col,
         kind=kind,
-        legend=False,
         **kwargs,
     )
-    g.set_titles("{row_name} - {col_name}")
-    g.add_legend(title="", bbox_to_anchor=(0.0, 1.02), loc="upper left")
+    title = _facet_title(row, col, "-")
+    if title is not None:
+        g.set_titles(title)
     labels = ["AP" if v == "average_precision" else v.capitalize() for v in values]
     g.set_xticklabels(labels)
     g.set_ylabels("")
@@ -159,6 +169,9 @@ def plot_pr(
     g.map(sns.lineplot, "recall", "high", alpha=0.01)
     g.map(sns.lineplot, "recall", "precision", alpha=0.5)
 
-    g.set_titles("{row_name} | {col_name}")
-    g.add_legend(title="", bbox_to_anchor=(0.0, 1.1), loc="upper left")
+    title = _facet_title(row, col, "|")
+    if title is not None:
+        g.set_titles(title)
+    if hue is not None:
+        g.add_legend(title="", bbox_to_anchor=(0.0, 1.1), loc="upper left")
     return g
