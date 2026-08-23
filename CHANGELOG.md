@@ -11,7 +11,11 @@ All notable changes to `replicas` are documented here.
   Spark offers no per-call checkpoint path, so the read/set/checkpoint/restore
   sequence runs under a process-wide lock: two concurrent `bootstrap` calls
   can otherwise checkpoint into each other's directory. A restore that fails
-  raises a `RuntimeWarning` rather than passing silently.
+  raises a `RuntimeWarning` rather than passing silently. Known limitation:
+  Spark reports a checkpoint directory as `<root>/<generated-id>` and setting
+  that value back appends another id, so a directory configured outside
+  `replicas` ends up one generated level deeper the first time it is restored.
+  Later calls reuse the remembered root and the depth holds.
 - The local checkpoint fallback is scoped to the current user rather than a
   fixed `/tmp/replicas/` that the first user on a machine takes ownership of.
 - `box_plot` explains that it needs a `replica` column instead of raising a

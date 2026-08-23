@@ -263,7 +263,16 @@ _REPORTED_ROOT: tuple[str, str] | None = None
 
 
 def _restore_target(reported: str) -> str:
-    """The root to set so the caller's checkpoint path stops at its old depth."""
+    """The root to set so the caller's checkpoint path stops growing.
+
+    Known limitation: a directory this package never set has no remembered
+    root, so the reported ``<root>/<uuid>`` is the best available value and
+    restoring it leaves the caller one generated level deeper than they
+    configured. That happens at most once -- the restore is itself recorded,
+    so every later call reuses the remembered root and the depth holds. The
+    alternative, recovering ``<root>`` by stripping the UUID, would depend on
+    Spark's generated path format, which is internal.
+    """
     remembered = _REPORTED_ROOT
     if remembered is not None and remembered[0] == reported:
         return remembered[1]

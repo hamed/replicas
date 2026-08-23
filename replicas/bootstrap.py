@@ -93,9 +93,14 @@ def bootstrap(
     See "Backends and reproducibility" in the README.
 
     Spark results are eagerly checkpointed once; local backends do not accept
-    ``checkpoint_dir``. Without ``by``, the whole Spark input is one stratum,
-    and an exact draw needs it materialized in a single Python worker. Pass
-    ``by`` on any input too large for one executor.
+    ``checkpoint_dir``. The checkpoint directory is session-wide Spark state,
+    so it is set, used, and restored under a lock. One limitation of that
+    restore: a directory configured outside this package gains one generated
+    path level the first time it happens. See "Core API" in the README.
+
+    Without ``by``, the whole Spark input is one stratum, and an exact draw
+    needs it materialized in a single Python worker. Pass ``by`` on any input
+    too large for one executor.
     """
     by_columns = normalize_columns(by, name="by")
     order_columns = normalize_columns(order_by, name="order_by")

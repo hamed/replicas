@@ -124,7 +124,12 @@ functions reject an existing reserved `replica` column.
 `checkpoint_dir` applies only to Spark; local backends are already eager. It
 is session-wide Spark state, so `bootstrap` restores whatever the caller had
 configured once the checkpoint is written, and serializes that sequence
-against concurrent `bootstrap` calls in the same driver.
+against concurrent `bootstrap` calls in the same driver. One limitation:
+Spark reports a checkpoint directory as `<root>/<generated-id>`, and setting
+that value back appends another id. A directory configured outside `replicas`
+therefore ends up one generated level deeper than you set it, the first time
+a `bootstrap` call with an explicit `checkpoint_dir` restores it. Later calls
+reuse the remembered root and the depth stops there.
 
 ## Backends and reproducibility
 
