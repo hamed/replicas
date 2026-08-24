@@ -229,9 +229,11 @@ def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
         A DataFrame of the same type as ``df``, with its columns unchanged,
         holding the single row per group whose ``threshold`` is the lowest one
         satisfying the target. Groups with no qualifying threshold are absent.
-        Selecting the lowest qualifying threshold is what makes this an
-        operating point for a metric like ``precision`` and not for one with
-        the opposite monotonicity, as described above.
+        Selecting the lowest qualifying threshold suits a metric that does not
+        increase as the threshold falls, which is the case ``at`` is built
+        for. Any metric runs; for one with the opposite monotonicity the same
+        rule may not pick the intended operating point, as the ``recall``
+        example above shows.
 
     Raises:
         TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
