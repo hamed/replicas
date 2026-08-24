@@ -48,7 +48,10 @@ polars = [
     "polars>=1.0",
 ]
 spark = [
-    "pyspark>=3.3",
+    # 3.5 is the floor for F.percentile, which pr_band needs: percentile_approx
+    # returns a different order statistic and puts the Spark confidence band
+    # visibly off the pandas and Polars ones.
+    "pyspark>=3.5",
     # PySpark warns on pandas >= 3.0 ("does not yet fully support").
     "pandas>=1.3,<3",
     "pyarrow>=4",
@@ -56,6 +59,10 @@ spark = [
 plot = [
     "matplotlib>=3.5",
     "seaborn>=0.12",
+    # Seaborn draws from pandas, and both helpers build a pandas frame. It
+    # arrives transitively through seaborn either way; declaring it keeps
+    # `replicas[polars,plot]` honest rather than dependent on that.
+    "pandas>=1.3",
 ]
 # Executing examples/quickstart.ipynb in CI is a regression test on the public
 # API: the notebook calls it the way the README does, and a crash there is a
@@ -68,7 +75,7 @@ notebook = [
 all = [
     "pandas>=1.3,<3",
     "polars>=1.0",
-    "pyspark>=3.3",
+    "pyspark>=3.5",
     "pyarrow>=4",
     "matplotlib>=3.5",
     "seaborn>=0.12",
@@ -81,7 +88,7 @@ dev = [
     "ruff==0.16.0",
     "pandas>=1.3,<3",
     "polars>=1.0",
-    "pyspark>=3.3",
+    "pyspark>=3.5",
     "pyarrow>=4",
     "matplotlib>=3.5",
     "seaborn>=0.12",

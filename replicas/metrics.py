@@ -50,6 +50,8 @@ _CONFUSION_COLUMNS = (
     "unlabeled",
 )
 _PR_COLUMNS = ("precision", "recall", "average_precision")
+_BAND_INPUT_COLUMNS = ("replica", "recall", "precision")
+_BAND_COLUMNS = ("recall", "precision", "low", "high")
 _BACKEND_MODULES = {
     "pandas": "replicas._metrics_backends.pandas_backend",
     "polars": "replicas._metrics_backends.polars_backend",
@@ -183,3 +185,50 @@ def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
     if "threshold" in groups:
         raise ValueError("threshold cannot also appear in by")
     return backend.at(df, groups, metric, value)
+
+
+def pr_band(
+    df: FrameT,
+    by: ByColumns = None,
+    *,
+    ci: float = 0.9,
+    recall_round: Optional[int] = None,  # noqa: UP045
+) -> FrameT:
+    """Reduce replicate PR curves to one curve with a confidence band.
+
+    Takes the output of :func:`calculate_pr` for a frame carrying a ``replica``
+    column, and returns ``by``, ``recall``, ``precision``, ``low``, ``high``.
+    ``precision`` is the original curve (replica ``-1``); ``low`` and ``high``
+    are the ``0.5 -/+ ci / 2`` quantiles of the replica curves.  Either side is
+    null at a recall value the other does not reach.  Rows sharing a recall
+    inside one replica collapse to their highest precision first -- the upper
+    envelope is the curve a threshold sweep actually reaches.
+
+    ``recall_round`` rounds recall before the aggregation.  It has to happen
+    here rather than in a caller: replica curves rarely land on identical
+    recall values, and once the quantiles are taken over exact values the
+    sparse band cannot be recovered.  Leave it ``None`` on large data.
+
+    This is the reduction behind :func:`replicas.plotting.plot_pr`, public
+    because the numbers are useful without the picture.  It runs natively on
+    each backend, so a large curve table is reduced before anything is
+    collected.  All three interpolate quantiles linearly, so equivalent input
+    gives equal band edges to within floating-point error.  pandas and Polars
+    sort by ``by`` then ``recall``; Spark row order is unspecified, as usual.
+    """
+    if not 0 < ci <= 1:
+        raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")
+    if recall_round is not None and (
+        isinstance(recall_round, bool) or not isinstance(recall_round, int)
+    ):
+        raise TypeError("recall_round must be an integer or None")
+
+    backend = _backend(df)
+    groups = _groups(by)
+    _validate_columns(df, _BAND_INPUT_COLUMNS, groups)
+    reserved = {*_BAND_INPUT_COLUMNS, *_BAND_COLUMNS}
+    conflicts = [column for column in groups if column in reserved]
+    if conflicts:
+        raise ValueError(f"by conflicts with a column pr_band reads or produces: {conflicts}")
+
+    return backend.pr_band(df, groups, 0.5 - ci / 2, 0.5 + ci / 2, recall_round)

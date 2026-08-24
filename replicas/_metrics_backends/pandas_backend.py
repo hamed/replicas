@@ -112,3 +112,40 @@ def at(
     else:
         result = result.head(1)
     return result[columns]
+
+
+def pr_band(
+    df: pd.DataFrame,
+    by: Sequence[str],
+    low: float,
+    high: float,
+    recall_round: int | None,
+) -> pd.DataFrame:
+    frame = df
+    if recall_round is not None:
+        frame = frame.assign(recall=frame["recall"].round(recall_round))
+
+    keys = [*by, "recall"]
+    envelope = (
+        frame.groupby([*keys, "replica"], dropna=False, observed=True, sort=False)["precision"]
+        .max()
+        .reset_index()
+    )
+
+    # Masked columns rather than two frames and a join: a null grouping value
+    # is an ordinary group here, and the three backends do not agree on
+    # whether a join matches null keys. One group-by has no such ambiguity.
+    envelope = envelope.assign(
+        _original=envelope["precision"].where(envelope["replica"] == -1),
+        _replica=envelope["precision"].where(envelope["replica"] >= 0),
+    )
+    result = (
+        envelope.groupby(keys, dropna=False, observed=True, sort=False)
+        .agg(
+            precision=("_original", "max"),
+            low=("_replica", lambda values: values.quantile(low)),
+            high=("_replica", lambda values: values.quantile(high)),
+        )
+        .reset_index()
+    )
+    return result.sort_values(keys, kind="mergesort", na_position="last").reset_index(drop=True)

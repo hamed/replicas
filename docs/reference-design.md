@@ -35,16 +35,19 @@ offers to delete it. It has done so once already; a reader who skipped cell 2 as
 instructed then hit `NameError: name 'plt' is not defined` at the first
 `plot_pr` call. `pyproject.toml` ignores F811 for notebooks to prevent a repeat.
 
-**The two `alpha=0.01` line plots in `plot_pr`** (`replicas/plotting.py:137-138`).
+**The two `alpha=0.01` line plots in `plot_pr`** (`replicas/plotting.py`).
 They are invisible on purpose. `map_dataframe(plt.fill_between, ...)` draws the
 confidence band without registering its data with the `FacetGrid`, so the axes
 do not autoscale to it and the hue levels do not reach the legend. These two
 near-transparent `map` calls are what fix both. They look like dead code.
 
-**`F.max('precision')` per (recall, replica)** (`replicas/plotting.py:117`).
-Many thresholds map to a single recall value. This takes the upper envelope of
-the curve, which is the correct PR curve; averaging or taking the first row
-would draw a different, wrong curve.
+**The maximum precision per (recall, replica)** (`pr_band`, in each of
+`replicas/_metrics_backends/`). Many thresholds map to a single recall value.
+This takes the upper envelope of the curve, which is the correct PR curve;
+averaging or taking the first row would draw a different, wrong curve. The
+notebook spells it `F.max('precision')` inside `plot_pr`; the package moved
+the whole reduction into a dispatched metric function, so each backend takes
+the same envelope in its own engine.
 
 **`positives` / `negatives` / `unlabeled` totals materialized on every row.**
 The notebook joins them; the package's native adapters use transforms or
@@ -87,9 +90,9 @@ inflates precision, which is the failure this schema exists to prevent.
 PR curve only at the last row of each group. Intentional — it makes the column
 readable at any threshold.
 
-**`groupBy(by)` next to `groupBy(*by, ...)`** in the same function
-(`replicas/plotting.py`, in `plot_pr`). Inconsistent style, identical
-semantics. Not worth a diff.
+**`groupBy(by)` next to `groupBy(*by, ...)`** in the same function. This was
+an inconsistency in the notebook's `plot_pr` with identical semantics. It is
+gone from the package: `plot_pr` no longer calls Spark at all.
 
 ## Where the library intentionally differs
 
@@ -104,6 +107,8 @@ generalizing its execution model.
 | bootstrap plan | one union and grouped pandas UDF per replica | one constant-depth grouped UDF plan; Arrow batches stream record batches on Spark 4.1+ |
 | null grouping keys in metrics | totals join can drop them | native transform/window totals preserve them |
 | empty `by` | some joins/windows fail | explicit ungrouped branches |
+| plot input | `box_plot` needs pandas, `plot_pr` needs Spark | both take pandas, Polars, or Spark; the reduction runs on the input's own backend |
+| PR confidence band | `percentile_approx` inside `plot_pr` | `pr_band`, a public dispatched metric function, exact on all three backends |
 | `at` with 0 or 2+ conditions | silently uses the first | raises `ValueError` |
 | checkpoint directory | hardcoded `/tmp/bootstraps/` | reuses Spark configuration, accepts an explicit directory, or uses a per-user `replicas-<user>` fallback under the system temporary directory; the caller's setting is restored afterwards |
 
