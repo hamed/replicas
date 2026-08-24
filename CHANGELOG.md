@@ -4,6 +4,8 @@ All notable changes to `replicas` are documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-24
+
 ### Fixed
 
 - `bootstrap` restores the Spark checkpoint directory the caller had
@@ -55,6 +57,16 @@ All notable changes to `replicas` are documented here.
   `by`.
 - `bootstrap` points at the README for the NaN exception to the cross-backend
   parity guarantee.
+- Every public function documents its arguments, its return value, and the
+  errors a caller can act on. `replicas.plotting` uses the same docstring
+  convention as the rest of the package and names `seaborn.FacetGrid` as what
+  both helpers return. `sample` documents the `round(group_size * fraction)`
+  draw size, including fractions above 1, and both samplers document that the
+  uniqueness `order_by` needs for a reproducible seeded Spark draw is the
+  caller's responsibility and is not verified.
+- The README defines "replica" once at first use, and states the limitation of
+  a percentile-bootstrap band as asymptotic coverage with a finite-sample
+  shortfall, instead of claiming the true interval is always the wider one.
 
 ### Added
 
@@ -84,5 +96,6 @@ First public alpha release.
   NumPy.
 - Notebook conformance tests and an executed reference design.
 
-[Unreleased]: https://github.com/hamed/replicas/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hamed/replicas/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hamed/replicas/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/hamed/replicas/releases/tag/v0.1.0
