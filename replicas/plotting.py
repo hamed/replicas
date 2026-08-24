@@ -6,8 +6,9 @@ Optional module — requires `matplotlib` and `seaborn`. Install with the
     pip install replicas[plot]
 
 Both helpers take a pandas, Polars, or Spark DataFrame, like the rest of the
-package. Seaborn draws from pandas, so each one reduces the data on its own
-backend first and collects only the result. `plot_pr` does that through
+package, and the `plot` extra is all you need on top of whichever backend you
+already have. Seaborn draws from pandas, so each one reduces the data on its
+own backend first and collects only the result. `plot_pr` does that through
 `replicas.metrics.pr_band`, which is public if you want the numbers without
 the picture.
 
@@ -19,6 +20,7 @@ plot of operating-point metrics, and a PR curve with a confidence band.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from importlib.util import find_spec
 from typing import Any, Optional
 
 from replicas.metrics import pr_band
@@ -27,10 +29,11 @@ from replicas.metrics import pr_band
 def _plot_dependencies():
     try:
         import matplotlib.pyplot as plt
+        import pandas  # noqa: F401  - seaborn reads pandas; fail here, not deeper
         import seaborn as sns
     except ImportError as exc:  # pragma: no cover - exercised in an isolated install
         raise ImportError(
-            "replicas.plotting requires matplotlib and seaborn. "
+            "replicas.plotting requires matplotlib, seaborn, and pandas. "
             "Install with: pip install 'replicas[plot]'"
         ) from exc
     return plt, sns
@@ -42,11 +45,24 @@ def _to_pandas(df: Any):
     Polars spells the conversion ``to_pandas`` and Spark spells it
     ``toPandas``; a pandas frame has neither and passes straight through. This
     runs after the backend has already reduced the data to plot size.
+
+    ``polars.DataFrame.to_pandas`` goes through Arrow, and the ``polars``
+    extra does not pull PyArrow -- nothing in ``replicas[polars,plot]`` does.
+    Rather than make every plotting user install PyArrow for a conversion only
+    Polars needs, fall back to a column-wise copy. The data is already reduced
+    to plot size by this point, so the slower path costs nothing that matters.
     """
-    for name in ("toPandas", "to_pandas"):
-        collect = getattr(df, name, None)
-        if callable(collect):
+    collect = getattr(df, "toPandas", None)
+    if callable(collect):
+        return collect()
+
+    collect = getattr(df, "to_pandas", None)
+    if callable(collect):
+        if find_spec("pyarrow") is not None:
             return collect()
+        import pandas as pd
+
+        return pd.DataFrame(df.to_dict(as_series=False))
     return df
 
 

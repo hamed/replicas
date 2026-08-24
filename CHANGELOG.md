@@ -26,7 +26,10 @@ All notable changes to `replicas` are documented here.
 ### Changed
 
 - **Breaking.** `box_plot` and `plot_pr` take a pandas, Polars, or Spark
-  DataFrame, like the rest of the package. `box_plot` was pandas-only and
+  DataFrame, like the rest of the package. The `plot` extra declares pandas
+  and is sufficient on top of any backend: a Polars frame is collected without
+  PyArrow when PyArrow is absent, since `replicas[polars,plot]` pulls none and
+  `polars.DataFrame.to_pandas` goes through Arrow. `box_plot` was pandas-only and
   `plot_pr` was Spark-only, so the two plot helpers demanded opposite
   backends and a pandas user could not call `plot_pr` at all. Each one now
   reduces the data on its own backend and collects only the result.

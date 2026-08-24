@@ -196,37 +196,25 @@ def pr_band(
 ) -> FrameT:
     """Reduce replicate PR curves to one curve with a confidence band.
 
-    Takes the output of :func:`calculate_pr` for a frame that carries a
-    ``replica`` column, and returns ``by`` followed by ``recall``,
-    ``precision``, ``low``, and ``high``.  ``precision`` is the original curve
-    (replica ``-1``); ``low`` and ``high`` are quantiles of the replica curves
-    at ``0.5 -/+ ci / 2``.  Either side is null where one is defined at a
-    recall value and the other is not.
+    Takes the output of :func:`calculate_pr` for a frame carrying a ``replica``
+    column, and returns ``by``, ``recall``, ``precision``, ``low``, ``high``.
+    ``precision`` is the original curve (replica ``-1``); ``low`` and ``high``
+    are the ``0.5 -/+ ci / 2`` quantiles of the replica curves.  Either side is
+    null at a recall value the other does not reach.  Rows sharing a recall
+    inside one replica collapse to their highest precision first -- the upper
+    envelope is the curve a threshold sweep actually reaches.
 
-    Several rows can share a recall value inside one replica, so the highest
-    precision at each recall is taken first.  That upper envelope is the curve
-    a threshold sweep actually reaches.
+    ``recall_round`` rounds recall before the aggregation.  It has to happen
+    here rather than in a caller: replica curves rarely land on identical
+    recall values, and once the quantiles are taken over exact values the
+    sparse band cannot be recovered.  Leave it ``None`` on large data.
 
-    This is the reduction behind :func:`replicas.plotting.plot_pr`, exposed on
-    its own because the band numbers are useful without the picture.  It runs
-    natively on each backend, so a large curve table is reduced to plot size
-    before anything is collected to the driver.
-
-    Parameters
-    ----------
-    ci : float
-        Width of the band, in ``(0, 1]``.  ``0.9`` gives the 5th and 95th
-        percentiles.
-    recall_round : int, optional
-        Round recall to this many decimals before the aggregation.  Replica
-        curves rarely share exact recall values on small data, so without it
-        the band can be sparse.  Leave it ``None`` on large data to keep the
-        resolution of the curve.
-
-    All three backends interpolate quantiles linearly, so equivalent input
+    This is the reduction behind :func:`replicas.plotting.plot_pr`, public
+    because the numbers are useful without the picture.  It runs natively on
+    each backend, so a large curve table is reduced before anything is
+    collected.  All three interpolate quantiles linearly, so equivalent input
     gives equal band edges to within floating-point error.  pandas and Polars
-    results are sorted by ``by`` and then ``recall``; Spark row order is
-    unspecified, as usual.
+    sort by ``by`` then ``recall``; Spark row order is unspecified, as usual.
     """
     if not 0 < ci <= 1:
         raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")

@@ -14,6 +14,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 
+from replicas import plotting  # noqa: E402
 from replicas.plotting import box_plot, plot_pr  # noqa: E402
 
 
@@ -159,4 +160,41 @@ def test_box_plot_accepts_every_backend(backend, spark):
     grid = box_plot(frame, hue="model", values=("threshold",))
 
     assert {text.get_text() for text in grid.legend.texts} == {"baseline", "candidate"}
+    plt.close(grid.figure)
+
+
+def test_polars_is_collected_without_pyarrow(monkeypatch):
+    # `replicas[polars,plot]` pulls no PyArrow, and polars' to_pandas goes
+    # through Arrow. Both helpers used to raise ModuleNotFoundError there.
+    pl = pytest.importorskip("polars")
+    frame = pl.DataFrame(
+        {
+            "model": ["a", "b", None],
+            "replica": [0, 1, 2],
+            "threshold": [0.4, 0.5, None],
+        }
+    )
+    expected = frame.to_pandas()
+
+    monkeypatch.setattr(plotting, "find_spec", lambda name: None)
+    collected = plotting._to_pandas(frame)
+
+    assert list(collected.columns) == list(expected.columns)
+    pd.testing.assert_frame_equal(collected, expected, check_dtype=False)
+
+
+def test_box_plot_works_without_pyarrow(monkeypatch):
+    pl = pytest.importorskip("polars")
+    monkeypatch.setattr(plotting, "find_spec", lambda name: None)
+    frame = pl.DataFrame(
+        {
+            "model": ["a", "a", "b", "b"],
+            "replica": [0, 1, 0, 1],
+            "threshold": [0.4, 0.5, 0.6, 0.7],
+        }
+    )
+
+    grid = box_plot(frame, hue="model", values=("threshold",))
+
+    assert {text.get_text() for text in grid.legend.texts} == {"a", "b"}
     plt.close(grid.figure)
