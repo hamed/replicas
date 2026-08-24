@@ -87,21 +87,29 @@ def box_plot(
 ):
     """Distribution of metrics across replicas, as box (or violin) plots.
 
-    Parameters
-    ----------
-    df : pandas, Polars, or Spark DataFrame
-        Usually the result of `at(...)`. A `replica` column is required: each
-        box is the distribution of one metric across replicas. `at` has already
-        reduced the data to one row per group and replica, so this is collected
-        to pandas whole.
-    row, col, hue : str, optional
-        Faceting / coloring columns passed through to seaborn.
-    kind : str
-        Passed to `sns.catplot` — `'box'`, `'violin'`, `'strip'`, etc.
-    values : sequence of str
-        Which metric columns to show on the x-axis.
-    **kwargs
-        Forwarded to `sns.catplot`.
+    Args:
+        df: A pandas, Polars, or Spark DataFrame, usually the result of
+          :func:`replicas.metrics.at`. A ``replica`` column is required: each
+          box is the distribution of one metric across replicas. ``at`` has
+          already reduced the data to one row per group and replica, so this is
+          collected to pandas whole.
+        row: Column to facet across rows, passed through to seaborn.
+        col: Column to facet across columns, passed through to seaborn.
+        hue: Column to color by, passed through to seaborn.
+        kind: The ``seaborn.catplot`` kind — ``'box'``, ``'violin'``,
+          ``'strip'``, and so on.
+        values: The metric columns to show on the x-axis.
+        **kwargs: Forwarded to ``seaborn.catplot``.
+
+    Returns:
+        The ``seaborn.FacetGrid`` that ``seaborn.catplot`` drew, so the caller
+        can adjust or save the figure.
+
+    Raises:
+        ImportError: matplotlib, seaborn, or pandas is not installed. Install
+          the ``plot`` extra.
+        ValueError: ``df`` has no ``replica`` column, so there is no
+          distribution to draw.
     """
     _, sns = _plot_dependencies()
 
@@ -153,23 +161,33 @@ def plot_pr(
 ):
     """Precision-recall curve with a bootstrap confidence band.
 
-    Parameters
-    ----------
-    df : pandas, Polars, or Spark DataFrame
-        Output of `calculate_pr` with a `replica` column. The band is computed
-        on that backend by `replicas.metrics.pr_band`, so only the reduced
-        curve is collected to pandas for drawing.
-    row, col, hue : str, optional
-        Faceting / coloring columns.
-    ci : float
-        Width of the confidence band (e.g. 0.9 for 5th-95th percentile). Must
-        lie in `(0, 1]`.
-    recall_round : int, optional
-        If set, round recall to this many decimals before aggregating across
-        replicas. Useful on small datasets where the raw curve is noisy.
-        Leave `None` for large datasets to preserve curve resolution.
-    **kwargs
-        Forwarded to `sns.FacetGrid`.
+    Args:
+        df: A pandas, Polars, or Spark DataFrame produced by
+          :func:`replicas.metrics.calculate_pr`, carrying a ``replica`` column.
+          The band is computed on that backend by
+          :func:`replicas.metrics.pr_band`, so only the reduced curve is
+          collected to pandas for drawing.
+        row: Column to facet across rows. Also groups the band.
+        col: Column to facet across columns. Also groups the band.
+        hue: Column to color by. Also groups the band.
+        ci: Width of the confidence band, so ``0.9`` draws the 5th to 95th
+          percentile. Must lie in ``(0, 1]``.
+        recall_round: Decimal places to round recall to before aggregating
+          across replicas. Useful on small datasets where the raw curve is
+          noisy; leave ``None`` on large datasets to preserve curve resolution.
+        **kwargs: Forwarded to ``seaborn.FacetGrid``.
+
+    Returns:
+        The ``seaborn.FacetGrid`` holding the curves and bands, so the caller
+        can adjust or save the figure.
+
+    Raises:
+        ImportError: matplotlib, seaborn, or pandas is not installed. Install
+          the ``plot`` extra.
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``recall_round`` is neither an integer nor ``None``.
+        ValueError: ``ci`` lies outside ``(0, 1]``, or ``df`` is missing
+          ``replica``, ``recall``, ``precision``, or a faceting column.
     """
     plt, sns = _plot_dependencies()
 

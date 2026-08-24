@@ -48,6 +48,34 @@ def sample(
     the same dataframe type. A supplied seed pins the PCG64 draws. For Spark,
     seeded calls require ``order_by`` to define stable positions within every
     stratum; those columns must uniquely order each stratum.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame to resample.
+        by: Stratification columns, as one column name or a sequence of names.
+          ``None`` treats the whole input as a single stratum.
+        fraction: The share of each stratum to draw. Every stratum yields
+          ``round(group_size * fraction)`` rows, matching pandas' round-to-
+          nearest ``frac`` semantics: ``1.0`` draws a full-size replica and
+          ``0.5`` draws half of each stratum, rounding a stratum of 5 rows to
+          2. Must be finite and non-negative.
+        seed: A non-negative run seed for reproducible draws, or ``None`` to
+          take a fresh one from the OS.
+        order_by: Columns defining stable positions within each stratum, as one
+          name or a sequence of names. Required for seeded Spark calls, where
+          they must uniquely order every stratum.
+
+    Returns:
+        A DataFrame of the same type and columns as ``df``, holding the drawn
+        rows. Row order is unspecified on every backend.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``by``, ``order_by``, ``fraction``, or ``seed`` is of the wrong type.
+        ValueError: A column named in ``by`` or ``order_by`` is missing from
+          ``df`` or repeated, ``df`` has duplicate column names or already
+          contains the reserved ``replica`` column, ``fraction`` is negative or
+          not finite, ``seed`` is negative, or a seeded Spark call omits
+          ``order_by``.
     """
     by_columns = normalize_columns(by, name="by")
     order_columns = normalize_columns(order_by, name="order_by")
@@ -101,6 +129,38 @@ def bootstrap(
     Without ``by``, the whole Spark input is one stratum, and an exact draw
     needs it materialized in a single Python worker. Pass ``by`` on any input
     too large for one executor.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame to resample.
+        by: Stratification columns, as one column name or a sequence of names.
+          ``None`` treats the whole input as a single stratum.
+        n_replicas: How many resampled replicas to draw. Must be a non-negative
+          integer; zero returns the original data alone.
+        checkpoint_dir: Where the Spark backend writes its one eager
+          checkpoint. Spark only; the local backends reject it. ``None`` reuses
+          the session's configured directory, or falls back to a per-user
+          ``replicas-<user>`` directory under the system temporary directory.
+        seed: A non-negative run seed for reproducible draws, or ``None`` to
+          take a fresh one from the OS.
+        order_by: Columns defining stable positions within each stratum, as one
+          name or a sequence of names. Required for seeded Spark calls, where
+          they must uniquely order every stratum.
+
+    Returns:
+        A DataFrame of the same type as ``df``, in long format: the input
+        columns followed by a 32-bit integer ``replica`` column, holding the
+        original rows as replica ``-1`` and the resampled rows as replicas
+        ``0..n_replicas-1``. Row order is unspecified on every backend.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``by``, ``order_by``, ``n_replicas``, or ``seed`` is of the wrong
+          type.
+        ValueError: A column named in ``by`` or ``order_by`` is missing from
+          ``df`` or repeated, ``df`` has duplicate column names or already
+          contains the reserved ``replica`` column, ``n_replicas`` or ``seed``
+          is negative, ``checkpoint_dir`` is set on a non-Spark input, or a
+          seeded Spark call omits ``order_by``.
     """
     by_columns = normalize_columns(by, name="by")
     order_columns = normalize_columns(order_by, name="order_by")

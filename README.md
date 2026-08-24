@@ -11,7 +11,8 @@ answer.
 
 `replicas` answers it by bootstrapping the test set: resampling with
 replacement, many times, and computing whatever metric you care about on each
-replica. The spread tells you the uncertainty.
+replica. A replica is one such resample of the input data. The spread across
+replicas tells you the uncertainty.
 
 ## Why this exists
 
@@ -201,9 +202,14 @@ you what would have happened on a slightly different test set, which is the
 question you actually care about when you are deciding whether to ship a
 model.
 
-(Caveat: bootstrap underestimates uncertainty. The true CI is usually a bit
-wider than the bootstrap CI. Treat the bands as a lower bound on how much you
-should worry.)
+(Caveat: these bands are percentile-bootstrap intervals, and their coverage
+guarantee is asymptotic. On a finite test set the interval can cover the true
+value less often than its nominal level, and the shortfall grows the smaller
+the sample, the more skewed the metric's sampling distribution, and the more
+biased the estimator — precision or recall near 0 or 1, and operating points
+resting on a handful of positives, are where it shows up first. Bias-corrected
+and accelerated (BCa) or studentized intervals correct part of it, and the
+replicate distribution `replicas` returns is the input either one needs.)
 
 **Spark.** At production scale, a Python loop over local resamples is too slow
 and the data is often already distributed. Comparing 5 models across 20

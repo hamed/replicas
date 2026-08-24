@@ -117,6 +117,27 @@ def confusion_table(df: FrameT, by: ByColumns = None) -> FrameT:
     On Spark, omitting ``by`` leaves the cumulative and total windows
     without a partition key, so Spark moves every score to a single partition.
     Group by ``replica`` (the usual bootstrap case) to keep the work spread.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame carrying the ``prediction``,
+          ``positive``, ``negative``, and ``unlabeled`` columns described in
+          the module docstring.
+        by: Grouping columns, as one column name or a sequence of names.
+          ``None`` builds one table over the whole input. Pass ``replica`` for
+          bootstrap output.
+
+    Returns:
+        A DataFrame of the same type as ``df``, with the ``by`` columns
+        followed by ``threshold``, cumulative ``TP``/``FP``/``UP``, per-score
+        ``dTP``/``dFP``/``dUP``, and group totals
+        ``positives``/``negatives``/``unlabeled``.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``by`` is not a column name or a sequence of column names.
+        ValueError: ``df`` has duplicate column names or is missing a required
+          or grouping column, ``by`` repeats a column, or a ``by`` column
+          collides with a name this function reads or produces.
     """
     backend = _backend(df)
     groups = _groups(by)
@@ -140,6 +161,25 @@ def calculate_pr(df: FrameT, by: ByColumns = None) -> FrameT:
 
     As in ``confusion_table``, omitting ``by`` on Spark leaves the
     cumulative window unpartitioned and collapses the data to one partition.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame produced by
+          :func:`confusion_table`.
+        by: Grouping columns, as one column name or a sequence of names, and
+          the same grouping used to build ``df``. ``None`` treats the whole
+          input as one group.
+
+    Returns:
+        A DataFrame of the same type as ``df``, holding the confusion-table
+        columns plus ``precision``, ``recall``, and ``average_precision``, with
+        thresholds that add no true positives dropped.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``by`` is not a column name or a sequence of column names.
+        ValueError: ``df`` has duplicate column names or is missing a
+          confusion-table or grouping column, ``by`` repeats a column, or a
+          ``by`` column collides with a name this function reads or produces.
     """
     backend = _backend(df)
     groups = _groups(by)
@@ -174,6 +214,29 @@ def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
 
     On Spark, omitting ``by`` leaves the ranking window without a
     partition key and moves every row to a single partition.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame carrying ``threshold`` and the
+          targeted metric column, usually the output of :func:`calculate_pr`.
+        by: Grouping columns, as one column name or a sequence of names.
+          ``None`` treats the whole input as one group. Include ``replica`` to
+          get one operating point per replica.
+        **kwargs: Exactly one ``metric=value`` target, naming the metric column
+          to threshold on and the value it must reach, as in
+          ``precision=0.95``.
+
+    Returns:
+        A DataFrame of the same type as ``df``, with its columns unchanged,
+        holding the single row per group whose ``threshold`` is the lowest one
+        satisfying the target. Groups with no qualifying threshold are absent.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
+          ``by`` is not a column name or a sequence of column names.
+        ValueError: ``kwargs`` does not hold exactly one condition, ``df`` has
+          duplicate column names or is missing ``threshold``, the metric
+          column, or a grouping column, ``by`` repeats a column, or ``by``
+          contains ``threshold``.
     """
     if len(kwargs) != 1:
         raise ValueError(f"at() requires exactly one metric=value condition, got {len(kwargs)}")
@@ -215,6 +278,36 @@ def pr_band(
     collected.  All three interpolate quantiles linearly, so equivalent input
     gives equal band edges to within floating-point error.  pandas and Polars
     sort by ``by`` then ``recall``; Spark row order is unspecified, as usual.
+
+    Args:
+        df: A pandas, Polars, or Spark DataFrame produced by
+          :func:`calculate_pr`, carrying ``replica``, ``recall``, and
+          ``precision`` columns.
+        by: Grouping columns, as one column name or a sequence of names, giving
+          one band per group. ``None`` reduces the whole input to one band.
+          Do not include ``replica``: the replicas are what the band is taken
+          over.
+        ci: Width of the band as a share of the replica distribution, so
+          ``0.9`` puts ``low`` and ``high`` at the 5th and 95th percentiles.
+          Must lie in ``(0, 1]``.
+        recall_round: Decimal places to round ``recall`` to before aggregating,
+          or ``None`` to keep exact values. Rounding thickens the band on small
+          data, where replica curves rarely share recall values.
+
+    Returns:
+        A DataFrame of the same type as ``df``, with the ``by`` columns
+        followed by ``recall``, ``precision`` (the original replica ``-1``
+        curve), and the ``low``/``high`` band edges. Either edge is null at a
+        recall the other does not reach.
+
+    Raises:
+        TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, ``by``
+          is not a column name or a sequence of column names, or
+          ``recall_round`` is neither an integer nor ``None``.
+        ValueError: ``ci`` lies outside ``(0, 1]``, ``df`` has duplicate column
+          names or is missing ``replica``, ``recall``, ``precision``, or a
+          grouping column, ``by`` repeats a column, or a ``by`` column collides
+          with a name this function reads or produces.
     """
     if not 0 < ci <= 1:
         raise ValueError(f"ci must be in the interval (0, 1], got {ci!r}")
