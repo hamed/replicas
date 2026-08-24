@@ -106,17 +106,15 @@ def pr_band(
     keys = [*by, "recall"]
     envelope = frame.group_by([*keys, "replica"]).agg(pl.col("precision").max())
 
-    original = envelope.filter(pl.col("replica") == -1).select(keys + ["precision"])
-    band = (
-        envelope.filter(pl.col("replica") >= 0)
-        .group_by(keys)
-        .agg(
-            # Polars defaults to "nearest"; pandas and Spark interpolate
-            # linearly, and the three have to agree.
-            pl.col("precision").quantile(low, interpolation="linear").alias("low"),
-            pl.col("precision").quantile(high, interpolation="linear").alias("high"),
-        )
+    # Filtered aggregates rather than two frames and a join: a null grouping
+    # value is an ordinary group here, and Polars joins do not match null keys
+    # by default. One group-by has no such ambiguity.
+    replicas = pl.col("replica") >= 0
+    result = envelope.group_by(keys).agg(
+        pl.col("precision").filter(pl.col("replica") == -1).max().alias("precision"),
+        # Polars defaults to "nearest"; pandas and Spark interpolate linearly,
+        # and the three have to agree.
+        pl.col("precision").filter(replicas).quantile(low, interpolation="linear").alias("low"),
+        pl.col("precision").filter(replicas).quantile(high, interpolation="linear").alias("high"),
     )
-
-    result = original.join(band, on=keys, how="full", coalesce=True)
     return result.sort(keys, nulls_last=True)

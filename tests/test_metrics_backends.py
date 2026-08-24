@@ -482,3 +482,55 @@ def test_pr_band_requires_a_replica_column():
     curve = _replicated_curve("pandas", None).drop(columns=["replica"])
     with pytest.raises(ValueError, match="missing required columns"):
         pr_band(curve, "name")
+
+
+def test_pr_band_treats_a_null_group_as_one_group(backend, spark):
+    # The module contract says a null grouping value is an ordinary group.
+    # An earlier version joined the original curve to the band, and the three
+    # backends disagreed on whether a join matches null keys: pandas matched
+    # them, Polars and Spark split the group into two half-filled rows.
+    rows = [
+        (None, replica, 0.5, precision) for replica, precision in ((-1, 0.8), (0, 0.7), (1, 0.9))
+    ]
+    # An explicit schema, because an all-null column with no declared type is
+    # dtype Null on Polars and untyped on Spark. A real caller has a typed
+    # column that happens to hold nulls, which is what this test is about.
+    if backend == "pandas":
+        curve = pd.DataFrame(rows, columns=["name", "replica", "recall", "precision"])
+    elif backend == "polars":
+        pl = pytest.importorskip("polars")
+        curve = pl.DataFrame(
+            rows,
+            schema={
+                "name": pl.String,
+                "replica": pl.Int64,
+                "recall": pl.Float64,
+                "precision": pl.Float64,
+            },
+            orient="row",
+        )
+    else:
+        curve = spark.createDataFrame(
+            rows, "name string, replica long, recall double, precision double"
+        )
+
+    band = _to_pandas(pr_band(curve, "name", ci=0.5))
+
+    assert len(band) == 1
+    assert pd.isna(band.loc[0, "name"])
+    assert band.loc[0, "precision"] == pytest.approx(0.8)
+    assert band.loc[0, "low"] == pytest.approx(0.75)
+    assert band.loc[0, "high"] == pytest.approx(0.85)
+
+
+def test_pr_band_leaves_the_band_null_where_only_the_original_reaches(backend, spark):
+    rows = [("model", -1, 0.9, 0.4), ("model", -1, 0.5, 0.7), ("model", 0, 0.5, 0.6)]
+    curve = _frame(backend, rows, ["name", "replica", "recall", "precision"], spark)
+
+    band = _to_pandas(pr_band(curve, "name"), [("recall", True)])
+
+    assert band["recall"].tolist() == [0.5, 0.9]
+    # No replica reaches recall 0.9, so the band is undefined there while the
+    # original curve still has a point.
+    assert band.loc[1, "precision"] == pytest.approx(0.4)
+    assert pd.isna(band.loc[1, "low"])

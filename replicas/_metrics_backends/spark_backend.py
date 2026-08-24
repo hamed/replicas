@@ -115,17 +115,15 @@ def pr_band(
     keys = [*by, "recall"]
     envelope = frame.groupBy(*keys, "replica").agg(F.max("precision").alias("precision"))
 
-    original = envelope.filter(F.col("replica") == -1).select(*keys, "precision")
-    band = (
-        envelope.filter(F.col("replica") >= 0)
-        .groupBy(*keys)
-        .agg(
-            # percentile, not percentile_approx: the approximation returns a
-            # different order statistic, which puts the Spark band edges
-            # visibly off the pandas and Polars ones.
-            F.percentile("precision", low).alias("low"),
-            F.percentile("precision", high).alias("high"),
-        )
+    # Conditional aggregates rather than two frames and a join: a null
+    # grouping value is an ordinary group here, and Spark's join on a column
+    # list uses null-unsafe equality. One group-by has no such ambiguity.
+    replicas = F.when(F.col("replica") >= 0, F.col("precision"))
+    return envelope.groupBy(*keys).agg(
+        F.max(F.when(F.col("replica") == -1, F.col("precision"))).alias("precision"),
+        # percentile, not percentile_approx: the approximation returns a
+        # different order statistic, which puts the Spark band edges visibly
+        # off the pandas and Polars ones.
+        F.percentile(replicas, low).alias("low"),
+        F.percentile(replicas, high).alias("high"),
     )
-
-    return original.join(band, on=keys, how="full_outer")

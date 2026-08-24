@@ -57,7 +57,10 @@ All notable changes to `replicas` are documented here.
 
 - `pr_band(df, by=..., ci=..., recall_round=...)`, the reduction behind
   `plot_pr`, as a public metric function on all three backends. It returns the
-  original curve and a pointwise quantile band across the replicas.
+  original curve and a pointwise quantile band across the replicas. A null
+  grouping value is one group, as it is everywhere else in the module: the
+  three backends reach that through one grouped aggregation rather than a
+  join, because they disagree on whether a join matches null keys.
 - A `notebook` extra and a CI job that executes `examples/quickstart.ipynb`
   and compares its outputs with the committed ones.
 

@@ -132,13 +132,20 @@ def pr_band(
         .reset_index()
     )
 
-    original = envelope.loc[envelope["replica"] == -1, [*keys, "precision"]]
-    band = (
-        envelope.loc[envelope["replica"] >= 0]
-        .groupby(keys, dropna=False, observed=True, sort=False)["precision"]
-        .agg(low=lambda values: values.quantile(low), high=lambda values: values.quantile(high))
+    # Masked columns rather than two frames and a join: a null grouping value
+    # is an ordinary group here, and the three backends do not agree on
+    # whether a join matches null keys. One group-by has no such ambiguity.
+    envelope = envelope.assign(
+        _original=envelope["precision"].where(envelope["replica"] == -1),
+        _replica=envelope["precision"].where(envelope["replica"] >= 0),
+    )
+    result = (
+        envelope.groupby(keys, dropna=False, observed=True, sort=False)
+        .agg(
+            precision=("_original", "max"),
+            low=("_replica", lambda values: values.quantile(low)),
+            high=("_replica", lambda values: values.quantile(high)),
+        )
         .reset_index()
     )
-
-    result = original.merge(band, on=keys, how="outer")
     return result.sort_values(keys, kind="mergesort", na_position="last").reset_index(drop=True)
