@@ -229,6 +229,9 @@ def at(df: FrameT, by: ByColumns = None, **kwargs: Any) -> FrameT:
         A DataFrame of the same type as ``df``, with its columns unchanged,
         holding the single row per group whose ``threshold`` is the lowest one
         satisfying the target. Groups with no qualifying threshold are absent.
+        Selecting the lowest qualifying threshold is what makes this an
+        operating point for a metric like ``precision`` and not for one with
+        the opposite monotonicity, as described above.
 
     Raises:
         TypeError: ``df`` is not a pandas, Polars, or Spark DataFrame, or
@@ -291,8 +294,11 @@ def pr_band(
           ``0.9`` puts ``low`` and ``high`` at the 5th and 95th percentiles.
           Must lie in ``(0, 1]``.
         recall_round: Decimal places to round ``recall`` to before aggregating,
-          or ``None`` to keep exact values. Rounding thickens the band on small
-          data, where replica curves rarely share recall values.
+          or ``None`` to keep exact values. Rounding groups nearby recall
+          values together, which makes the band less sparse on small data,
+          where replica curves rarely land on identical recall values. It also
+          changes which replicas contribute at each recall value, so a band
+          edge can move in either direction.
 
     Returns:
         A DataFrame of the same type as ``df``, with the ``by`` columns

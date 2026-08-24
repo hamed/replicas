@@ -208,8 +208,8 @@ value less often than its nominal level, and the shortfall grows the smaller
 the sample, the more skewed the metric's sampling distribution, and the more
 biased the estimator — precision or recall near 0 or 1, and operating points
 resting on a handful of positives, are where it shows up first. Bias-corrected
-and accelerated (BCa) or studentized intervals correct part of it, and the
-replicate distribution `replicas` returns is the input either one needs.)
+and accelerated (BCa) and studentized intervals can improve coverage in some
+settings, but need more than the percentile interval itself.)
 
 **Spark.** At production scale, a Python loop over local resamples is too slow
 and the data is often already distributed. Comparing 5 models across 20

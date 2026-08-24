@@ -53,16 +53,21 @@ def sample(
         df: A pandas, Polars, or Spark DataFrame to resample.
         by: Stratification columns, as one column name or a sequence of names.
           ``None`` treats the whole input as a single stratum.
-        fraction: The share of each stratum to draw. Every stratum yields
-          ``round(group_size * fraction)`` rows, matching pandas' round-to-
-          nearest ``frac`` semantics: ``1.0`` draws a full-size replica and
-          ``0.5`` draws half of each stratum, rounding a stratum of 5 rows to
-          2. Must be finite and non-negative.
+        fraction: How many rows to draw from each stratum, relative to that
+          stratum's size. Every stratum yields
+          ``round(group_size * fraction)`` rows, matching pandas'
+          round-to-nearest ``frac`` semantics: ``1.0`` draws a full-size
+          replica, ``0.5`` draws half of each stratum, rounding a stratum of 5
+          rows to 2, and a value above ``1.0`` draws more rows than the stratum
+          holds. Must be finite and non-negative.
         seed: A non-negative run seed for reproducible draws, or ``None`` to
           take a fresh one from the OS.
         order_by: Columns defining stable positions within each stratum, as one
-          name or a sequence of names. Required for seeded Spark calls, where
-          they must uniquely order every stratum.
+          name or a sequence of names. Required for seeded Spark calls. For a
+          seeded draw to be reproducible these columns must uniquely order
+          every stratum: rows tied on them can land in a different order from
+          one run to the next. That uniqueness is the caller's responsibility
+          and is not verified; only the presence of the columns is checked.
 
     Returns:
         A DataFrame of the same type and columns as ``df``, holding the drawn
@@ -143,8 +148,11 @@ def bootstrap(
         seed: A non-negative run seed for reproducible draws, or ``None`` to
           take a fresh one from the OS.
         order_by: Columns defining stable positions within each stratum, as one
-          name or a sequence of names. Required for seeded Spark calls, where
-          they must uniquely order every stratum.
+          name or a sequence of names. Required for seeded Spark calls. For a
+          seeded draw to be reproducible these columns must uniquely order
+          every stratum: rows tied on them can land in a different order from
+          one run to the next. That uniqueness is the caller's responsibility
+          and is not verified; only the presence of the columns is checked.
 
     Returns:
         A DataFrame of the same type as ``df``, in long format: the input
