@@ -116,6 +116,11 @@ metric. PR curves are the demo, not the point.
 
 For a complete, download-free walkthrough with confidence intervals and plots,
 open the [quickstart notebook](https://github.com/hamed/replicas/blob/main/examples/quickstart.ipynb).
+The [census income notebook](https://github.com/hamed/replicas/blob/main/examples/census_income.ipynb)
+runs the same pipeline against real data: it downloads the Census Income set,
+trains four models, compares them with bands instead of point estimates, and
+then splits the same evaluation by subgroup, where the bands are wide enough to
+show that the comparison stops being decidable.
 
 ## Core API
 

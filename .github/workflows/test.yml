@@ -111,6 +111,11 @@ jobs:
   # helpers. Executing it catches breakage the unit tests miss, because it
   # calls the package the way the README tells a user to.
   #
+  # examples/census_income.ipynb does the same against real data and two
+  # trained models. It downloads the Census Income set from OpenML, so this
+  # job needs network; a fetch failure there is a flake, not a defect in the
+  # package.
+  #
   # docs/reference-design.ipynb is deliberately not here. It is the reference
   # design: it defines its own copies of the functions and needs kagglehub,
   # scikit-learn, and CatBoost. It lives under docs/ for that reason -- it is a
@@ -145,7 +150,10 @@ jobs:
       - name: Execute the quickstart notebook and compare its outputs
         run: uv run --no-project python scripts/check_example_notebook.py examples/quickstart.ipynb
 
-      - name: Confirm the notebook is unchanged in the working tree
+      - name: Execute the census income notebook and compare its outputs
+        run: uv run --no-project python scripts/check_example_notebook.py examples/census_income.ipynb
+
+      - name: Confirm the notebooks are unchanged in the working tree
         run: git diff --exit-code -- examples/
 
   package:
