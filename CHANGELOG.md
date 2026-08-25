@@ -12,8 +12,10 @@ All notable changes to `replicas` are documented here.
   compares them with bands rather than point estimates. Over the full test set
   all four average-precision intervals are disjoint, so the ranking is a
   result and not a hunch. The notebook then re-runs the same pipeline grouped
-  by sex and by race, where `plot_pr` draws a row/column grid and the bands
-  swallow whole panels: the smallest cell holds 46 people and 3 positives. The
+  by sex and by age band, where `plot_pr` draws a row/column grid and the bands
+  swallow whole panels. The under-25 cells make the point that sample size is
+  not what matters: 1,165 women in that band yield 6 positives, and a
+  precision-recall curve is built out of positives. The
   linear SVM scores through `decision_function` rather than `predict_proba`,
   which shows that a prediction column need only be monotone, not a
   probability. It is committed with its outputs and executed in CI like the
