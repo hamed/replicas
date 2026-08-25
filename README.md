@@ -226,7 +226,7 @@ than 1. The local backends are eager and need no checkpoint.
 
 ## Reference design
 
-`examples/precision_recall.ipynb` is the notebook this library was ported from,
+`docs/reference-design.ipynb` is the notebook this library was ported from,
 committed as it was executed — the prose, the figures, and a worked
 credit-card-fraud comparison of two models. It is the specification, not a
 demo of the package: it defines every function inline so it runs in Colab with

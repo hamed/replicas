@@ -1,9 +1,9 @@
 # Reference design
 
-`examples/precision_recall.ipynb` is the reference design for this library, not
-merely an example of it. It is the original Colab notebook, committed as it was
-executed: 49 cells, 13 of them with outputs, 6 figures. The library in
-`replicas/` is a port of it.
+`reference-design.ipynb`, beside this file, is the reference design for this
+library, not merely an example of it. It is the original Colab notebook,
+committed as it was executed: 49 cells, 13 of them with outputs, 6 figures. The
+library in `replicas/` is a port of it.
 
 When the two disagree, the notebook is the specification and the library is the
 thing that needs explaining.
