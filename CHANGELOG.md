@@ -4,6 +4,18 @@ All notable changes to `replicas` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/census_income.ipynb`, a worked example against real data. It
+  downloads the Census Income set from OpenML, trains a gradient-boosted tree
+  and a logistic regression, and compares them with bands rather than point
+  estimates: the average-precision intervals are [0.816, 0.835] and
+  [0.634, 0.660], and at a precision floor of 0.80 the recall intervals are
+  [0.593, 0.639] and [0.227, 0.309]. Neither pair overlaps, which is the
+  comparison the library exists to make. It is committed with its outputs and
+  executed in CI like the quickstart, so a change that moves the numbers fails
+  the build. The `notebook` extra now declares scikit-learn.
+
 ## [0.2.0] - 2026-08-24
 
 ### Fixed
