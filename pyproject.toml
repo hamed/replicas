@@ -128,10 +128,10 @@ ignore = ["E501"]  # line length handled by formatter
 #       stand on its own — `plot_pr` calls `plt.fill_between`. Ruff sees a
 #       redefinition; a reader who skips as instructed sees a NameError once
 #       the "redundant" import is removed.
-"examples/*.ipynb" = ["E402", "I001", "F811"]
+"docs/reference-design.ipynb" = ["E402", "I001", "F811"]
 
 [tool.ruff.format]
 # Prose, not source. The formatter rewrites Python inside README code blocks
 # (dropping alignment chosen for readability) and rewrites every notebook cell.
 # Both are still linted — only reformatting is off.
-exclude = ["README.md", "examples/*.ipynb"]
+exclude = ["README.md", "docs/reference-design.ipynb", "examples/*.ipynb"]

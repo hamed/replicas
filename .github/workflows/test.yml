@@ -111,9 +111,10 @@ jobs:
   # helpers. Executing it catches breakage the unit tests miss, because it
   # calls the package the way the README tells a user to.
   #
-  # examples/precision_recall.ipynb is deliberately not here. It is the
-  # reference design: it defines its own copies of the functions and needs
-  # kagglehub, scikit-learn, and CatBoost.
+  # docs/reference-design.ipynb is deliberately not here. It is the reference
+  # design: it defines its own copies of the functions and needs kagglehub,
+  # scikit-learn, and CatBoost. It lives under docs/ for that reason -- it is a
+  # specification to read, not an example to run.
   notebook:
     runs-on: ubuntu-latest
     steps:
